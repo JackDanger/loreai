@@ -12,7 +12,7 @@ artifactProvider:
     artifacts:
       CI: npm-tarball
 targets:
-  # Publish the 3 workspace packages (@loreai/core, @loreai/opencode, @loreai/pi).
+  # Publish the 4 workspace packages (@loreai/core, @loreai/opencode, @loreai/pi, @loreai/gateway).
   # Craft discovers these from the root package.json `workspaces` field and
   # auto-generates per-package targets with `includeNames` set to the default
   # artifact regex (e.g. `/^loreai-opencode-\d.*\.tgz$/`).
