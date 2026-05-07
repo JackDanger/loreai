@@ -34,8 +34,8 @@ jobs:
         run: bun run build
 
       # Pack each workspace package into its own tarball. Craft's npm target
-      # with `workspaces: true` discovers all three and publishes them in
-      # dependency order (@loreai/core → @loreai/opencode + @loreai/pi).
+      # with `workspaces: true` discovers all four and publishes them in
+      # dependency order (@loreai/core → @loreai/opencode + @loreai/pi + @loreai/gateway).
       #
       # We use `bun pm pack` (not `npm pack`) because Bun automatically rewrites
       # `workspace:*` dependency specifiers to the actual version being packed.
@@ -49,7 +49,7 @@ jobs:
         if: startsWith(github.ref, 'refs/heads/release/')
         run: |
           mkdir -p dist-tarballs
-          for pkg in packages/core packages/opencode packages/pi; do
+          for pkg in packages/core packages/opencode packages/pi packages/gateway; do
             echo "Packing $pkg"
             (cd "$pkg" && bun pm pack --destination ../../dist-tarballs)
           done
