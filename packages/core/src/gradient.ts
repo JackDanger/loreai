@@ -1211,17 +1211,20 @@ function tryFitStable(input: {
       0,
     );
 
-    // Use the budget that was in effect when the pin was created (Option 1:
-    // snapshot isolation) with a 10% hysteresis margin (Option 2) so that
-    // small budget fluctuations from overhead drift and
-    // deduplicateToolOutputs() token-estimate changes don't evict the pin.
-    const effectiveBudget = rawWindowCache!.pinnedBudget * 1.10;
-    if (pinnedTokens <= effectiveBudget || pinnedTokens <= input.rawBudget) {
-      // Pinned window still fits — either within the hysteresis margin of the
-      // original budget, or within the current budget (which may be larger due
-      // to overhead drift). Re-pin at the current budget when we exceed the
-      // old hysteresis so that next turn's check uses a fresh baseline.
-      if (pinnedTokens > effectiveBudget) {
+    // Use the budget that was in effect when the pin was created with a 15%
+    // hysteresis margin so that small budget fluctuations from overhead drift
+    // and deduplicateToolOutputs() token-estimate changes don't evict the pin.
+    // The high-water mark (max of pinned and current budgets) prevents overhead
+    // EMA drift from shrinking the effective budget below what was valid when
+    // the pin was created — the budget shrank due to overhead drift, not because
+    // the context limit changed.
+    const highWaterBudget = Math.max(rawWindowCache!.pinnedBudget, input.rawBudget);
+    const effectiveBudget = highWaterBudget * 1.15;
+    if (pinnedTokens <= effectiveBudget) {
+      // Pinned window still fits within the hysteresis margin of the high-water
+      // budget. Re-pin at the current budget when the old hysteresis is exceeded
+      // so that next turn's check uses a fresh baseline.
+      if (pinnedTokens > rawWindowCache!.pinnedBudget * 1.15) {
         input.sessState.rawWindowCache = {
           ...rawWindowCache!,
           pinnedRawCount: pinnedWindow.length,
@@ -1659,7 +1662,11 @@ export function transform(input: {
     // Anthropic's actual byte-identity cache.
     const prefixFingerprint = result.messages.slice(0, 5).map((m) => {
       const text = m.parts
-        .map((p) => ("text" in p ? p.text?.slice(0, 40) : p.type))
+        .map((p) => {
+          if (isTextPart(p)) return p.text?.slice(0, 40) ?? "";
+          if (isReasoningPart(p)) return p.text?.slice(0, 40) ?? "";
+          return p.type;
+        })
         .join("|");
       return `${m.info.role}:${text.slice(0, 60)}`;
     }).join(",");
