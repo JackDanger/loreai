@@ -493,6 +493,14 @@ async function buildBinary() {
   ];
   const compileCmd = compileArgs.join(" ");
   console.log(`Compile command: ${compileCmd}`);
+  // Debug: verify worker file exists at compile time
+  try {
+    const { statSync } = await import("node:fs");
+    const wstat = statSync(workerCompileEntry);
+    console.log(`Worker file exists: ${workerCompileEntry} (${wstat.size} bytes)`);
+  } catch (e) {
+    console.error(`Worker file MISSING: ${workerCompileEntry}`, e);
+  }
 
   try {
     execSync(compileCmd, { stdio: "inherit", cwd: packageDir });
