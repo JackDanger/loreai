@@ -492,6 +492,7 @@ async function buildBinary() {
     workerCompileEntry,
   ];
   const compileCmd = compileArgs.join(" ");
+  console.log(`Compile command: ${compileCmd}`);
 
   try {
     execSync(compileCmd, { stdio: "inherit", cwd: packageDir });
