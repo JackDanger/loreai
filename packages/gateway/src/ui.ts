@@ -907,8 +907,8 @@ function pageCosts(): string {
   body += `<h2>Historical Estimates (from stored data)</h2>`;
   body += `<p style="color:var(--fg3);font-size:0.9em">
     Estimated from ${hist.messageCount.toLocaleString()} stored messages across ${hist.sessionCount} sessions.
-    Distillation overhead and avoided compactions can be estimated from stored data.
-    Cache warming, 1h TTL, and batch API savings require live request data and are <strong>only tracked for live sessions</strong>.
+    Distillation overhead (including batch API discount), avoided compactions, and net savings are estimated from stored data.
+    Cache warming and 1h TTL savings require live request data and are <strong>only tracked for live sessions</strong>.
   </p>`;
 
   if (hist.sessionCount === 0) {
