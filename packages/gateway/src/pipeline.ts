@@ -1971,8 +1971,10 @@ async function handlePassthrough(
  * different bytes and bust the cache the warmer just paid to preserve.
  */
 function isCacheWarm(state: SessionState): boolean {
-  const lastWarmup = state.warmup?.lastWarmupAt;
-  if (!lastWarmup) return false;
+  const warmup = state.warmup;
+  // Require at least one successful warmup before claiming warm.
+  // This also gates the forceKeepWarm early-return below.
+  if (!warmup?.lastWarmupAt) return false;
 
   const profile = resolveWarmingProfile(
     state.lastModel,
@@ -1981,7 +1983,15 @@ function isCacheWarm(state: SessionState): boolean {
   );
   if (!profile) return false;
 
-  return (Date.now() - lastWarmup) < profile.ttlMs;
+  // /keep sessions: consider warm if the last warmup was within 2 TTL
+  // windows. The warmer fires once per TTL window, so 2× provides a
+  // safety margin while still expiring if the warmer has stopped
+  // (e.g. circuit breaker tripped, process-level failure).
+  if (warmup.forceKeepWarm) {
+    return (Date.now() - warmup.lastWarmupAt) < profile.ttlMs * 2;
+  }
+
+  return (Date.now() - warmup.lastWarmupAt) < profile.ttlMs;
 }
 
 // ---------------------------------------------------------------------------
