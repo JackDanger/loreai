@@ -1,4 +1,46 @@
 # Changelog
+## 0.19.0
+
+### New Features ✨
+
+- (cch) Add seeds for Claude Code up to 2.1.141 by @github-actions in [#297](https://github.com/BYK/loreai/pull/297)
+- Adaptive dedup threshold with automatic and manual calibration by @BYK in [#321](https://github.com/BYK/loreai/pull/321)
+- Add logo favicon to web dashboard pages by @BYK in [f94c4cf6](https://github.com/BYK/loreai/commit/f94c4cf6e6c66137cf26de20a6abfb4958ea3d4d)
+- Show live/total breakdown in dashboard and cost pills by @BYK in [#317](https://github.com/BYK/loreai/pull/317)
+- 3-block system prompt for cache-efficient LTM injection by @BYK in [#311](https://github.com/BYK/loreai/pull/311)
+- Defer context-dependent LTM to turn 2, add hybrid vector+FTS5 scoring by @BYK in [#310](https://github.com/BYK/loreai/pull/310)
+- Add OpenAI Batch API support for worker calls by @BYK in [#309](https://github.com/BYK/loreai/pull/309)
+- Re-run forSession() for fresh LTM on Layer 4 emergency reset by @BYK in [#305](https://github.com/BYK/loreai/pull/305)
+- Crash-safe state persistence via periodic flush by @BYK in [#303](https://github.com/BYK/loreai/pull/303)
+
+### Bug Fixes 🐛
+
+- Redirect GET / to /ui dashboard by @BYK in [#327](https://github.com/BYK/loreai/pull/327)
+- Preserve thinking blocks in recall follow-up to prevent API rejection by @BYK in [#326](https://github.com/BYK/loreai/pull/326)
+- Resolve embedding worker crash in CJS bundle (LOREAI-GATEWAY-D/E) by @BYK in [#325](https://github.com/BYK/loreai/pull/325)
+- Pass project_id (not path) to projectName() on warming costs table by @BYK in [#324](https://github.com/BYK/loreai/pull/324)
+- Prevent fatal crash when startServer() called with missing hosts by @BYK in [#322](https://github.com/BYK/loreai/pull/322)
+- Remove text from logo SVG, keep icon only by @BYK in [42e27682](https://github.com/BYK/loreai/commit/42e27682fccbab2832f2a2b8a6d3551ce80b1dd1)
+- Use icon-only logo (no text) for favicon by @BYK in [ecab9388](https://github.com/BYK/loreai/commit/ecab9388fc9cb411f6cb9761c862d61918cd2223)
+- Prevent test data from leaking into production DB by @BYK in [#320](https://github.com/BYK/loreai/pull/320)
+- Use export for env vars in install script examples by @BYK in [#319](https://github.com/BYK/loreai/pull/319)
+- Key global histograms by project_id instead of directory path by @BYK in [#318](https://github.com/BYK/loreai/pull/318)
+- Tidy dashboard and cost intelligence pills for scope consistency by @BYK in [#316](https://github.com/BYK/loreai/pull/316)
+- Pass --since tag to craft changelog for shallow clone compatibility by @BYK in [#315](https://github.com/BYK/loreai/pull/315)
+- Show craft stderr on nightly version failure for debugging by @BYK in [#314](https://github.com/BYK/loreai/pull/314)
+- Compute nightly version from next semver bump instead of current release by @BYK in [#313](https://github.com/BYK/loreai/pull/313)
+- Address review findings from 3-block system prompt PR by @BYK in [#312](https://github.com/BYK/loreai/pull/312)
+- Strip recall marker text from temporal storage to prevent FTS echo by @BYK in [#306](https://github.com/BYK/loreai/pull/306)
+- Pre-populate headerSessionIndex from DB on startup by @BYK in [#304](https://github.com/BYK/loreai/pull/304)
+- Prevent layer-4 stickiness trap and refactor compression stages by @BYK in [#300](https://github.com/BYK/loreai/pull/300)
+- Add concurrency guards and persist volatile session state across restarts by @BYK in [#298](https://github.com/BYK/loreai/pull/298)
+
+### Documentation 📚
+
+- Recover install.sh curl copy/paste block on landing page by @BYK in [eb671df7](https://github.com/BYK/loreai/commit/eb671df78080438fa7d55acbe35b8cd0e30a11d6)
+- Change Lore to Lore.AI and adjust scaling by @sylncnr in [#308](https://github.com/BYK/loreai/pull/308)
+- Update landing page branding and header layout by @sylncnr in [#307](https://github.com/BYK/loreai/pull/307)
+
 ## 0.18.0
 
 ### New Features ✨
