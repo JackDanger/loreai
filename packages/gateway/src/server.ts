@@ -42,7 +42,7 @@ try {
 
 const CORS_HEADERS: Record<string, string> = {
   "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET, POST, OPTIONS",
+  "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
   "access-control-allow-headers": "*",
   "access-control-max-age": "86400",
 };
@@ -319,6 +319,12 @@ export function startServer(config: GatewayConfig): {
       // GET /health — health check
       if (method === "GET" && pathname === "/health") {
         return handleHealth();
+      }
+
+      // GET/POST/DELETE /api/* — REST API (lazy-imported to keep proxy hot path fast)
+      if (pathname.startsWith("/api/")) {
+        const { handleAPIRequest } = await import("./api");
+        return withCors(await handleAPIRequest(req, url, config));
       }
 
       // GET/POST /ui/* — Web dashboard (lazy-imported to keep proxy hot path fast)
