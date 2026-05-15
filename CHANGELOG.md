@@ -1,4 +1,32 @@
 # Changelog
+## 0.20.0
+
+### New Features ✨
+
+- (cch) Add seeds for Claude Code up to 2.1.142 by @github-actions in [#329](https://github.com/BYK/loreai/pull/329)
+- REST API for remote data management, recall, and import by @BYK in [#337](https://github.com/BYK/loreai/pull/337)
+- Lore start defaults to hosted mode, opt out with --local by @BYK in [#334](https://github.com/BYK/loreai/pull/334)
+- LORE_HOSTED_MODE — disable FS operations on client-controlled paths by @BYK in [#333](https://github.com/BYK/loreai/pull/333)
+- X-Lore-Git-Remote header and LORE_REMOTE_URL for remote gateway project grouping by @BYK in [#331](https://github.com/BYK/loreai/pull/331)
+
+### Bug Fixes 🐛
+
+- Resolve pi build rootDir error by adding types export to core by @BYK in [#346](https://github.com/BYK/loreai/pull/346)
+- Prevent Sentry noise from embedding failures and fix surrogate pair truncation by @BYK in [#344](https://github.com/BYK/loreai/pull/344)
+- Pre-truncate long texts to prevent ONNX OOM and report embedding errors to Sentry by @BYK in [#343](https://github.com/BYK/loreai/pull/343)
+- Break Layer 4 cache hit rate death spiral by @BYK in [#341](https://github.com/BYK/loreai/pull/341)
+- Exempt sub-agent sessions from cache warming by @BYK in [#340](https://github.com/BYK/loreai/pull/340)
+- Harden remote import error handling and clean up code by @BYK in [#339](https://github.com/BYK/loreai/pull/339)
+- Import dedup checks remote DB when LORE_REMOTE_URL is set by @BYK in [#338](https://github.com/BYK/loreai/pull/338)
+- Stop merging sub-agent turns into parent session by @BYK in [#335](https://github.com/BYK/loreai/pull/335)
+- Use text blocks in recall follow-up to prevent tool leaking to client by @BYK in [#332](https://github.com/BYK/loreai/pull/332)
+- Keep recall tool in follow-up request to prevent API rejection by @BYK in [#330](https://github.com/BYK/loreai/pull/330)
+
+### Internal Changes 🔧
+
+- (ui) Unify Per Session and Live Sessions tables into shared renderer by @BYK in [#336](https://github.com/BYK/loreai/pull/336)
+- Extract ltmDiffThreshold() helper to deduplicate step 6 and 7b by @BYK in [#342](https://github.com/BYK/loreai/pull/342)
+
 ## 0.19.0
 
 ### New Features ✨
