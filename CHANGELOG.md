@@ -1,4 +1,96 @@
 # Changelog
+## 0.23.0
+
+### New Features ✨
+
+#### Cch
+
+- Add seeds for Claude Code up to 2.1.146 by @github-actions in [#436](https://github.com/BYK/loreai/pull/436)
+- Add seeds for Claude Code up to 2.1.145 by @github-actions in [#412](https://github.com/BYK/loreai/pull/412)
+- Add seeds for Claude Code up to 2.1.144 by @github-actions in [#379](https://github.com/BYK/loreai/pull/379)
+
+#### Ui
+
+- Visual cost bars, savings hero, and daily trend chart by @BYK in [#418](https://github.com/BYK/loreai/pull/418)
+- Chat-bubble conversation view for session page by @BYK in [#398](https://github.com/BYK/loreai/pull/398)
+
+#### Other
+
+- Migrate eval system to vitest-evals by @BYK in [#441](https://github.com/BYK/loreai/pull/441)
+- Allow multiple recall tool calls per request (multi-turn recall) by @BYK in [#404](https://github.com/BYK/loreai/pull/404)
+- Improve recall tool description + add cross-session cue eval scenarios by @BYK in [#396](https://github.com/BYK/loreai/pull/396)
+- Inflate + replay compatibility — skip filler turns in gateway replay by @BYK in [#393](https://github.com/BYK/loreai/pull/393)
+- Wire --inflate flag into eval CLI for 400K token scenario testing by @BYK in [#386](https://github.com/BYK/loreai/pull/386)
+- Lightweight cross-session action tag context for curator by @BYK in [#385](https://github.com/BYK/loreai/pull/385)
+- Scenario inflator for 400K token eval scenarios by @BYK in [#384](https://github.com/BYK/loreai/pull/384)
+- Add local LLM provider support (vllm, ollama, llama.cpp, etc.) by @BYK in [#383](https://github.com/BYK/loreai/pull/383)
+- Add temperature parameter to LLMClient interface by @BYK in [#382](https://github.com/BYK/loreai/pull/382)
+- Lower echo threshold + clustering for broader behavioral pattern detection by @BYK in [#377](https://github.com/BYK/loreai/pull/377)
+- Action tagging in distillation for implicit behavioral pattern detection by @BYK in [#376](https://github.com/BYK/loreai/pull/376)
+- Vector similarity-based behavioral pattern detection by @BYK in [#375](https://github.com/BYK/loreai/pull/375)
+- Add session recording, replay, and scenario filtering to eval harness by @BYK in [#374](https://github.com/BYK/loreai/pull/374)
+- Add comprehensive eval suite for Lore's five key dimensions by @BYK in [#369](https://github.com/BYK/loreai/pull/369)
+- Tool-call-aware cache warming + /lore:warm:* commands + UI controls by @BYK in [#370](https://github.com/BYK/loreai/pull/370)
+
+### Bug Fixes 🐛
+
+- (cache-warmer) Tighten warming heuristics to reduce net negative spend by @BYK in [#429](https://github.com/BYK/loreai/pull/429)
+- (eval) Build realistic Lore context for QA questions by @BYK in [#414](https://github.com/BYK/loreai/pull/414)
+- (ui) Daily cost trend chart not rendering bars by @BYK in [#426](https://github.com/BYK/loreai/pull/426)
+- 1h TTL cache write pricing and dynamic savings/overhead wording by @BYK in [#445](https://github.com/BYK/loreai/pull/445)
+- Resolve Sentry issues — JSONC config, ENOENT guard, Node.js port fallback, transient error filtering by @BYK in [#443](https://github.com/BYK/loreai/pull/443)
+- Use compaction as primary baseline, fix threshold, update marketing by @BYK in [#437](https://github.com/BYK/loreai/pull/437)
+- Context health note — signal omitted details instead of false assurance by @BYK in [#434](https://github.com/BYK/loreai/pull/434)
+- Scripted interceptor for eval replay + distillation prompt tuning by @BYK in [#433](https://github.com/BYK/loreai/pull/433)
+- Downweight knowledge in recall when session content exists by @BYK in [#432](https://github.com/BYK/loreai/pull/432)
+- Store scripted assistant content in eval + session-affinity recall boost by @BYK in [#431](https://github.com/BYK/loreai/pull/431)
+- Add amnesia mode and x-lore-no-store to prevent QA contamination in recall by @BYK in [#430](https://github.com/BYK/loreai/pull/430)
+- Prevent tool_use/tool_result mismatch at gradient prefix/raw boundary (#424) by @BYK in [#428](https://github.com/BYK/loreai/pull/428)
+- Resume sessions across client restarts instead of orphaning them by @BYK in [#427](https://github.com/BYK/loreai/pull/427)
+- Create dev shims in gateway build so workspace consumers resolve bun exports by @BYK in [#425](https://github.com/BYK/loreai/pull/425)
+- Drop callCount from dedup tests — still flaky after #419 by @BYK in [#421](https://github.com/BYK/loreai/pull/421)
+- Use promise identity in dedup tests to eliminate cross-test flakiness by @BYK in [#419](https://github.com/BYK/loreai/pull/419)
+- Build Bun-native ESM bundle for OpenCode plugin by @BYK in [#415](https://github.com/BYK/loreai/pull/415)
+- Remove distilled=0 filter from temporal BM25 search by @BYK in [#413](https://github.com/BYK/loreai/pull/413)
+- Add deepseek- dash-prefix routing to UPSTREAM_ROUTES by @rgutzen in [#406](https://github.com/BYK/loreai/pull/406)
+- Add anti-imitation instruction to recall tool description by @BYK in [#411](https://github.com/BYK/loreai/pull/411)
+- Inject X-Lore-Project header to eliminate cwd fallback warning by @BYK in [#408](https://github.com/BYK/loreai/pull/408)
+- Code block alignment in Simplicity & Migration sections by @BYK in [#407](https://github.com/BYK/loreai/pull/407)
+- Background worker rate-limit resilience for Claude Max by @BYK in [#397](https://github.com/BYK/loreai/pull/397)
+- QA prompt instructs LLM to use recall tool by @BYK in [#400](https://github.com/BYK/loreai/pull/400)
+- Pin user assertions in distillation to prevent loss in long sessions by @BYK in [#394](https://github.com/BYK/loreai/pull/394)
+- Fall back to upstream when compaction summary generation fails by @BYK in [#392](https://github.com/BYK/loreai/pull/392)
+- Pass local:true when starting gateway in-process to prevent hosted mode by @BYK in [#390](https://github.com/BYK/loreai/pull/390)
+- Curator uses distilled observations when all messages are distilled by @BYK in [#389](https://github.com/BYK/loreai/pull/389)
+- Judge prompt should not penalize extra correct information by @BYK in [#388](https://github.com/BYK/loreai/pull/388)
+- Remove distilled=0 filter from temporal vector search by @BYK in [#387](https://github.com/BYK/loreai/pull/387)
+- Preserve temporal embeddings on distillation + expose source IDs in recall by @BYK in [#380](https://github.com/BYK/loreai/pull/380)
+- Improve distillation detail preservation for code-specific artifacts by @BYK in [#378](https://github.com/BYK/loreai/pull/378)
+- Warmup cooldown timing + rising cost threshold + accurate TTL pricing by @BYK in [#373](https://github.com/BYK/loreai/pull/373)
+- Improve curator preference detection and evolution handling by @BYK in [#372](https://github.com/BYK/loreai/pull/372)
+
+### Documentation 📚
+
+- Replace waitlist form with Loops.so integration by @BYK in [#447](https://github.com/BYK/loreai/pull/447)
+- Hero stat 13/20 → 2.6x total recall by @BYK in [#444](https://github.com/BYK/loreai/pull/444)
+- Update website copy — sessions lasting days, crystal-clear memory by @BYK in [#442](https://github.com/BYK/loreai/pull/442)
+- Add releasing instructions to AGENTS.md by @BYK in [#438](https://github.com/BYK/loreai/pull/438)
+- Update eval results — context retention 3.9→4.6, +77% vs tail-window by @BYK in [#435](https://github.com/BYK/loreai/pull/435)
+- Update website and README with context retention eval results by @BYK in [#420](https://github.com/BYK/loreai/pull/420)
+- Update website hero stats with 400K eval results by @BYK in [#405](https://github.com/BYK/loreai/pull/405)
+- Update README with 400K token eval results by @BYK in [#403](https://github.com/BYK/loreai/pull/403)
+
+### Internal Changes 🔧
+
+- (deps) Bump pytest from 8.2.2 to 9.0.3 in /packages/core/eval/fixtures/projects/python-api in the pip group across 1 directory by @dependabot in [#371](https://github.com/BYK/loreai/pull/371)
+- Disable eval workflow on PRs by @BYK in [#446](https://github.com/BYK/loreai/pull/446)
+- Improve distillation detail retention at 400K+ token sessions by @BYK in [#423](https://github.com/BYK/loreai/pull/423)
+- Remove deprecated eval infra and update docs with new eval results by @BYK in [#422](https://github.com/BYK/loreai/pull/422)
+
+### Other
+
+- eval: add 2.3M-token mega-session scenario — Lore 4.0 vs Compaction 2.4 (+70%) by @BYK in [#440](https://github.com/BYK/loreai/pull/440)
+
 ## 0.22.0
 
 ### New Features ✨
