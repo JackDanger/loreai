@@ -1,4 +1,20 @@
 # Changelog
+## 0.24.0
+
+### New Features ✨
+
+- Workspace discovery for monorepo support by @BYK in [#451](https://github.com/BYK/loreai/pull/451)
+
+### Bug Fixes 🐛
+
+- (ci) Write Craft publish-state file so retries skip already-published targets by @BYK in [#449](https://github.com/BYK/loreai/pull/449)
+- Detect and recover from stale OAuth credentials in background workers by @BYK in [#454](https://github.com/BYK/loreai/pull/454)
+- Recover from prompt overflow errors and add safety margins by @BYK in [#452](https://github.com/BYK/loreai/pull/452)
+
+### Internal Changes 🔧
+
+- (publish) Finalize Sentry release after publishing by @BYK in [#450](https://github.com/BYK/loreai/pull/450)
+
 ## 0.23.0
 
 ### New Features ✨
