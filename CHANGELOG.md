@@ -1,4 +1,10 @@
 # Changelog
+## 0.24.1
+
+### Bug Fixes 🐛
+
+- Retry with token-level truncation on ONNX OOM in embedding worker by @BYK in [#457](https://github.com/BYK/loreai/pull/457)
+
 ## 0.24.0
 
 ### New Features ✨
