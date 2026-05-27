@@ -42,6 +42,10 @@ export interface GatewayConfig {
   upstreamOpenAI: string;
   /** Idle timeout in seconds before triggering background work. Default: 60 */
   idleTimeoutSeconds: number;
+  /** Session eviction timeout in seconds. Sessions idle beyond this are evicted
+   *  from memory (state is preserved in DB). Default: 1800 (30 min).
+   *  Set to 0 to disable eviction. Env: LORE_SESSION_EVICTION_TIMEOUT */
+  sessionEvictionTimeoutSeconds: number;
   /** Whether to log requests. Default: false. Env: LORE_DEBUG */
   debug: boolean;
   /** Remote gateway URL. When set, `lore run` delegates to this gateway instead of starting a local one. Env: LORE_REMOTE_URL */
@@ -72,6 +76,7 @@ export function loadConfig(): GatewayConfig {
       env.LORE_UPSTREAM_OPENAI || "https://api.openai.com",
     ),
     idleTimeoutSeconds: parsePositiveInt(env.LORE_IDLE_TIMEOUT, 60),
+    sessionEvictionTimeoutSeconds: parseNonNegativeInt(env.LORE_SESSION_EVICTION_TIMEOUT, 1800),
     debug: isTruthy(env.LORE_DEBUG),
     remoteUrl: env.LORE_REMOTE_URL
       ? trimTrailingSlash(env.LORE_REMOTE_URL)
@@ -354,6 +359,22 @@ function parsePositiveInt(
   if (!value) return fallback;
   const n = Number.parseInt(value, 10);
   if (Number.isNaN(n) || n <= 0) {
+    console.error(
+      `[lore] warning: invalid value "${value}", using default ${fallback}`,
+    );
+    return fallback;
+  }
+  return n;
+}
+
+/** Like parsePositiveInt but allows 0 (for "disabled" semantics). */
+function parseNonNegativeInt(
+  value: string | undefined,
+  fallback: number,
+): number {
+  if (!value) return fallback;
+  const n = Number.parseInt(value, 10);
+  if (Number.isNaN(n) || n < 0) {
     console.error(
       `[lore] warning: invalid value "${value}", using default ${fallback}`,
     );
