@@ -111,6 +111,8 @@ describe("fetchOAuthQuotaSnapshot", () => {
     expect(headers["user-agent"]).toContain("claude-cli/");
   });
 
+  // Extended timeout: makeOAuthSession + captureBillingPrefix setup can exceed
+  // the default 1s Bun test timeout on CI runners under load.
   test("reuses sniffed Claude Code headers when a session is provided", async () => {
     makeOAuthSession("sid-ua");
     // captureSessionHeaders requires billing + a turn; simulate by capturing
@@ -126,7 +128,7 @@ describe("fetchOAuthQuotaSnapshot", () => {
     // buildOAuthWorkerHeaders always sets a UA + the oauth beta for OAuth sessions.
     expect(headers["user-agent"]).toContain("claude-cli/");
     expect(headers["anthropic-beta"]).toContain("oauth-2025-04-20");
-  });
+  }, 5000);
 
   test("missing seven_day → that window is null", async () => {
     globalThis.fetch = mock(() =>
