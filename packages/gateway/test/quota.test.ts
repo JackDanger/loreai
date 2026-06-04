@@ -1,11 +1,4 @@
-import {
-  describe,
-  test,
-  expect,
-  beforeEach,
-  afterEach,
-  mock,
-} from "bun:test";
+import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
 import {
   fetchOAuthQuotaSnapshot,
   fetchQuotaDeduped,
@@ -167,7 +160,9 @@ describe("fetchOAuthQuotaSnapshot", () => {
     globalThis.fetch = mock(() =>
       Promise.resolve(
         new Response(
-          JSON.stringify({ five_hour: { utilization: 50, resets_at: "2026-06-02T18:00:00Z" } }),
+          JSON.stringify({
+            five_hour: { utilization: 50, resets_at: "2026-06-02T18:00:00Z" },
+          }),
           { status: 200 },
         ),
       ),
@@ -182,7 +177,9 @@ describe("fetchOAuthQuotaSnapshot", () => {
     globalThis.fetch = mock(() =>
       Promise.resolve(
         new Response(
-          JSON.stringify({ five_hour: { utilization: 30, resets_at: "not-a-date" } }),
+          JSON.stringify({
+            five_hour: { utilization: 30, resets_at: "not-a-date" },
+          }),
           { status: 200 },
         ),
       ),
@@ -232,7 +229,9 @@ describe("fetchOAuthQuotaSnapshot", () => {
   test("percent-format utilization (>1) is kept as-is", async () => {
     globalThis.fetch = mock(() =>
       Promise.resolve(
-        new Response(JSON.stringify({ five_hour: { utilization: 45.2 } }), { status: 200 }),
+        new Response(JSON.stringify({ five_hour: { utilization: 45.2 } }), {
+          status: 200,
+        }),
       ),
     ) as unknown as typeof fetch;
 
@@ -245,7 +244,9 @@ describe("fetchOAuthQuotaSnapshot", () => {
     globalThis.fetch = mock(() =>
       Promise.resolve(
         new Response(
-          JSON.stringify({ five_hour: { utilization: 50, resets_at: epochSec } }),
+          JSON.stringify({
+            five_hour: { utilization: 50, resets_at: epochSec },
+          }),
           { status: 200 },
         ),
       ),
@@ -260,7 +261,9 @@ describe("fetchOAuthQuotaSnapshot", () => {
     globalThis.fetch = mock(() =>
       Promise.resolve(
         new Response(
-          JSON.stringify({ five_hour: { utilization: 50, resets_at: epochMs } }),
+          JSON.stringify({
+            five_hour: { utilization: 50, resets_at: epochMs },
+          }),
           { status: 200 },
         ),
       ),
