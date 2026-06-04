@@ -1,0 +1,89 @@
+name: Docs Preview
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - '.github/workflows/docs-preview.yml'
+  pull_request:
+    # No paths filter on pull_request: the 'closed' event must always fire
+    # so the preview action can clean up deployed previews. A paths-filter
+    # step inside the job skips deploy for non-docs PRs.
+    types: [opened, reopened, synchronize, closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: docs-preview-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Check if docs files changed. On 'closed' events we always proceed
+      # (cleanup). On push events paths are already filtered at trigger level.
+      - name: Check for docs changes
+        id: filter
+        if: github.event_name == 'pull_request' && github.event.action != 'closed'
+        uses: dorny/paths-filter@v4
+        with:
+          filters: |
+            docs:
+              - 'docs/**'
+              - '.github/workflows/docs-preview.yml'
+
+      - name: Ensure .nojekyll at gh-pages root
+        # Skip when: (a) non-docs PR (not closed), or (b) fork PR
+        if: >-
+          (github.event.action == 'closed' || steps.filter.outputs.docs == 'true' || github.event_name == 'push') &&
+          (github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request')
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Try to fetch the gh-pages branch
+          if git fetch origin gh-pages:gh-pages 2>/dev/null; then
+            # Branch exists remotely, check if .nojekyll is present
+            if git show gh-pages:.nojekyll &>/dev/null; then
+              echo ".nojekyll already exists at gh-pages root"
+            else
+              echo "Adding .nojekyll to existing gh-pages branch"
+              git checkout gh-pages
+              touch .nojekyll
+              git add .nojekyll
+              git commit -m "Add .nojekyll to disable Jekyll processing"
+              git push origin gh-pages
+              git checkout "$GITHUB_SHA"
+            fi
+          else
+            # Branch doesn't exist, create it as an orphan branch
+            echo "Creating gh-pages branch with .nojekyll"
+            git checkout --orphan gh-pages
+            git rm -rf .
+            touch .nojekyll
+            git add .nojekyll
+            git commit -m "Initialize gh-pages with .nojekyll"
+            git push origin gh-pages
+            git checkout "$GITHUB_SHA"
+          fi
+
+      - name: Deploy Preview
+        # Skip when: (a) non-docs PR (not closed), or (b) fork PR
+        if: >-
+          (github.event.action == 'closed' || steps.filter.outputs.docs == 'true' || github.event_name == 'push') &&
+          (github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request')
+        uses: rossjrw/pr-preview-action@v1
+        with:
+          source-dir: docs/
+          preview-branch: gh-pages
+          umbrella-dir: _preview
+          pages-base-url: withlore.ai
+          action: ${{ github.event_name == 'push' && 'deploy' || 'auto' }}
+          pr-number: ${{ github.event_name == 'push' && 'main' || github.event.pull_request.number }}
+          comment: ${{ github.event_name != 'push' }}
