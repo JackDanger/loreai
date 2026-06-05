@@ -1468,13 +1468,15 @@ export async function deduplicateEntities(
       }
 
       // Alias-value overlap (strong → force auto-merge regardless of cosine).
-      const aSet = aliasSets.get(entry.id)!;
-      const bSet = aliasSets.get(other.id)!;
+      const aSet = aliasSets.get(entry.id);
+      const bSet = aliasSets.get(other.id);
       let aliasOverlap = false;
-      for (const v of aSet) {
-        if (bSet.has(v)) {
-          aliasOverlap = true;
-          break;
+      if (aSet && bSet) {
+        for (const v of aSet) {
+          if (bSet.has(v)) {
+            aliasOverlap = true;
+            break;
+          }
         }
       }
 
@@ -1508,7 +1510,8 @@ export async function deduplicateEntities(
       if (similarity > 0 && !pairSimilarities.has(pk)) {
         pairSimilarities.set(pk, similarity);
       }
-      if (!pairScores.has(pk) || score > pairScores.get(pk)!) {
+      const existing = pairScores.get(pk);
+      if (existing === undefined || score > existing) {
         pairScores.set(pk, aliasOverlap ? 1 : score);
       }
 
@@ -1529,14 +1532,17 @@ export async function deduplicateEntities(
   const claimed = new Set<string>();
   const rawClusters = new Map<string, DedupHit[]>();
   const sortedIds = [...neighborMap.keys()].sort(
-    (a, b) => neighborMap.get(b)!.length - neighborMap.get(a)!.length,
+    (a, b) =>
+      (neighborMap.get(b)?.length ?? 0) - (neighborMap.get(a)?.length ?? 0),
   );
 
   for (const centerId of sortedIds) {
     if (claimed.has(centerId)) continue;
     claimed.add(centerId);
+    const hits = neighborMap.get(centerId);
+    if (!hits) continue;
     const members: DedupHit[] = [];
-    for (const hit of neighborMap.get(centerId)!) {
+    for (const hit of hits) {
       if (claimed.has(hit.id)) continue;
       claimed.add(hit.id);
       members.push(hit);

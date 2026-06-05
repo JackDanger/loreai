@@ -5,7 +5,6 @@ import {
   test,
   expect,
   beforeEach,
-  mock,
 } from "bun:test";
 import { db, ensureProject } from "../src/db";
 import {

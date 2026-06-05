@@ -585,7 +585,7 @@ function promptChoice(
   return new Promise((resolveChoice) => {
     // Lazy import keeps CLI startup fast and avoids a top-level node:readline dep.
     const { createInterface } =
-      require("readline") as typeof import("readline");
+      require("node:readline") as typeof import("readline");
     const rl = createInterface({
       input: process.stdin,
       output: process.stdout,

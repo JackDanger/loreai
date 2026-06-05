@@ -34,7 +34,11 @@ import {
 import type { LLMClient } from "@loreai/core";
 import type { GatewayConfig } from "./config";
 import type { SessionState } from "./translate/types";
-import { getWorkerModel, protocolToProviderID, getModelEntrySync } from "./worker-model";
+import {
+  getWorkerModel,
+  protocolToProviderID,
+  getModelEntrySync,
+} from "./worker-model";
 import {
   isCircuitBreakerTripped,
   isWarmupAuthDisabled,

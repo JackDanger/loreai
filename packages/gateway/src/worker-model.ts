@@ -365,9 +365,7 @@ function resolveGitHubCopilotWorker(sessionModelID: string): {
  */
 export function getWorkerModel(
   sessionProviderID?: string,
-):
-  | { providerID: string; modelID: string }
-  | undefined {
+): { providerID: string; modelID: string } | undefined {
   // Env var override — highest priority. Useful for global worker model
   // configuration without per-project .lore.json (e.g. routing all workers
   // to MiniMax). Format: "providerID/modelID" or just "modelID" (defaults
@@ -417,8 +415,12 @@ export function getWorkerModel(
   // use the session's provider to pick a compatible default. Without this,
   // an OpenAI-only session (e.g. Codex) would get an Anthropic worker model
   // and every worker call would send the OpenAI key to api.anthropic.com → 401.
-  const effectiveProvider = cfg.model?.providerID ?? sessionProviderID ?? "anthropic";
-  const fallback = cfg.model ?? WORKER_DEFAULTS[effectiveProvider] ?? WORKER_DEFAULTS.anthropic;
+  const effectiveProvider =
+    cfg.model?.providerID ?? sessionProviderID ?? "anthropic";
+  const fallback =
+    cfg.model ??
+    WORKER_DEFAULTS[effectiveProvider] ??
+    WORKER_DEFAULTS.anthropic;
 
   return workerModel.resolveWorkerModel(
     effectiveProvider,

@@ -175,7 +175,7 @@ describe("entity dedup — deduplicateEntities()", () => {
     injectEmbedding(b, 20);
     injectSimilar(a, 20, 0.0008);
     injectSimilar(c, 20, 0.0008);
-    const r = await entities.deduplicateEntities(PROJECT, { dryRun: false });
+    const _r = await entities.deduplicateEntities(PROJECT, { dryRun: false });
     // One cluster centered on B absorbing A and C (no transitivity violation
     // because all three share the same near-identical direction here); the key
     // invariant is that no more than 2 entities are removed and 1 survives.
@@ -269,8 +269,10 @@ describe("entity dedup — adaptive calibration (kind='entity')", () => {
     }
     const t = entities.calibrateEntityDedupThreshold(pid);
     expect(t).not.toBeNull();
-    expect(t!).toBeGreaterThanOrEqual(0.8);
-    expect(t!).toBeLessThanOrEqual(0.95);
+    if (t === null)
+      throw new Error("calibrateEntityDedupThreshold returned null");
+    expect(t).toBeGreaterThanOrEqual(0.8);
+    expect(t).toBeLessThanOrEqual(0.95);
   });
 
   test("save/load threshold round-trips via kv_meta", () => {

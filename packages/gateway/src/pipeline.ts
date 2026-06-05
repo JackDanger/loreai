@@ -2730,7 +2730,8 @@ function postResponse(
       sessionID,
       actualInput,
       resp.usage.outputTokens ?? 0,
-      getWorkerModel(protocolToProviderID(sessionState.lastProtocol))?.modelID ?? "unknown",
+      getWorkerModel(protocolToProviderID(sessionState.lastProtocol))
+        ?.modelID ?? "unknown",
       req.model,
       sessionState.resolvedConversationTTL,
     );
@@ -2749,8 +2750,10 @@ function postResponse(
       containsGitCommit(req)
     ) {
       const modelInputCost =
-        getModelEntrySync(getWorkerModel(protocolToProviderID(sessionState.lastProtocol))?.modelID ?? "unknown").cost?.input ??
-        3;
+        getModelEntrySync(
+          getWorkerModel(protocolToProviderID(sessionState.lastProtocol))
+            ?.modelID ?? "unknown",
+        ).cost?.input ?? 3;
       const curationMultiplier =
         modelInputCost >= 5 ? 3 : modelInputCost >= 1 ? 2 : 1;
       const effectiveAfterTurns =
@@ -2860,7 +2863,8 @@ function scheduleBackgroundWork(
   if (isBackgroundPaused() || quotaPaused) return;
 
   const modelInputCost =
-    getModelEntrySync(getWorkerModel(sessionProvider)?.modelID ?? "unknown").cost?.input ?? 3;
+    getModelEntrySync(getWorkerModel(sessionProvider)?.modelID ?? "unknown")
+      .cost?.input ?? 3;
   const curationMultiplier =
     modelInputCost >= 5 ? 3 : modelInputCost >= 1 ? 2 : 1;
   const effectiveAfterTurns = cfg.curator.afterTurns * curationMultiplier;
@@ -2923,7 +2927,8 @@ export async function generateCompactionSummary(opts: {
   previousSummary?: string;
   sessionProviderID?: string;
 }): Promise<string | null> {
-  const { projectPath, sessionID, config, previousSummary, sessionProviderID } = opts;
+  const { projectPath, sessionID, config, previousSummary, sessionProviderID } =
+    opts;
   const llm = getLLMClient(config);
 
   // 1. Force-distill all undistilled messages.
