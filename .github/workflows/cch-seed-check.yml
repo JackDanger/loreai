@@ -25,11 +25,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
         with:
-          bun-version: latest
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
 
-      - run: bun install
+      - run: pnpm install --frozen-lockfile
 
       - name: Check for new Claude Code versions
         id: check
@@ -43,7 +45,7 @@ jobs:
           else
             # check-cc-version.ts exits 1 if extraction is needed
             set +e
-            result=$(bun run scripts/check-cc-version.ts --json 2>&1)
+            result=$(pnpm tsx scripts/check-cc-version.ts --json 2>&1)
             exit_code=$?
             set -e
 
@@ -78,16 +80,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
-      - run: bun install
+      - run: pnpm install --frozen-lockfile
 
       - name: Extract and apply all missing seeds
         id: extract
@@ -119,7 +118,7 @@ jobs:
             echo "========================================"
 
             OUTPUT="/tmp/seed-result-${VERSION}.json"
-            bun run scripts/extract-cch-seed.ts \
+            pnpm tsx scripts/extract-cch-seed.ts \
               --version "$VERSION" \
               --output "$OUTPUT"
 
@@ -132,10 +131,10 @@ jobs:
             # Apply: pin WORKER_VERSION only for the latest version
             if [ "$VERSION" = "$LATEST_VERSION" ]; then
               echo "Applying seed for $VERSION (pinning as WORKER_VERSION)..."
-              bun run scripts/extract-cch-seed.ts --apply "$VERSION" "$SEED"
+              pnpm tsx scripts/extract-cch-seed.ts --apply "$VERSION" "$SEED"
             else
               echo "Applying seed for $VERSION (backfill, no pin)..."
-              bun run scripts/extract-cch-seed.ts --apply --no-pin "$VERSION" "$SEED"
+              pnpm tsx scripts/extract-cch-seed.ts --apply --no-pin "$VERSION" "$SEED"
             fi
 
             EXTRACTED+=("$VERSION")
@@ -150,7 +149,7 @@ jobs:
           echo "extracted-versions=${EXTRACTED[*]}" >> "$GITHUB_OUTPUT"
 
       - name: Verify tests pass
-        run: bun test packages/gateway/test/cch.test.ts
+        run: pnpm test packages/gateway/test/cch.test.ts
 
       - name: Check for existing PR
         id: check-pr

@@ -31,7 +31,6 @@ import {
   linkSync,
   mkdirSync,
   readFileSync,
-  readdirSync,
   renameSync,
   unlinkSync,
   writeFileSync,
@@ -174,19 +173,29 @@ function prepareVendorModelCache(target: CompileTarget): string | null {
 // esbuild: onnxruntime-node → onnxruntime-web (WASM) redirect
 // ---------------------------------------------------------------------------
 
-/** Resolve a path inside the onnxruntime-web package from .bun/ store. */
+/** Resolve the onnxruntime-web package directory using Node's module
+ *  resolution. onnxruntime-web is a transitive dep of
+ *  @huggingface/transformers → we resolve from @loreai/core (which
+ *  has transformers as a direct dep), then from transformers to
+ *  onnxruntime-web. Works with any package manager layout (bun, pnpm,
+ *  npm) because it uses require.resolve, not filesystem scanning. */
 function findOrtWebDir(): string {
-  const bunDir = join(repoRoot, "node_modules", ".bun");
-  const prefix = "onnxruntime-web@";
-  const entries = readdirSync(bunDir).filter((e) => e.startsWith(prefix));
-  if (entries.length === 0) {
-    throw new Error(
-      `findOrtWebDir: cannot find onnxruntime-web in node_modules/.bun/`,
-    );
+  const coreDir = join(repoRoot, "packages", "core");
+  const coreRequire = createRequire(`${coreDir}/`);
+  // Step 1: find @huggingface/transformers
+  const tfEntry = coreRequire.resolve("@huggingface/transformers");
+  let tfDir = dirname(tfEntry);
+  while (tfDir !== "/" && !existsSync(join(tfDir, "package.json"))) {
+    tfDir = dirname(tfDir);
   }
-  const stable = entries.filter((m) => !m.includes("-", prefix.length));
-  const pick = (stable.length > 0 ? stable : entries).sort().reverse()[0];
-  return join(bunDir, pick, "node_modules", "onnxruntime-web");
+  // Step 2: from transformers, find onnxruntime-web
+  const tfRequire = createRequire(`${tfDir}/`);
+  const ortEntry = tfRequire.resolve("onnxruntime-web");
+  let ortDir = dirname(ortEntry);
+  while (ortDir !== "/" && !existsSync(join(ortDir, "package.json"))) {
+    ortDir = dirname(ortDir);
+  }
+  return ortDir;
 }
 
 /**
@@ -573,19 +582,27 @@ async function buildBinary() {
   const fossilizeTarget = (t: CompileTarget): string =>
     t.startsWith("windows") ? t.replace("windows", "win") : t;
   const platformArgs = targets.map(fossilizeTarget).join(",");
-  // Prefer fossilize from local node_modules/.bin (faster,
-  // deterministic). Fall back to npx for CI environments that
-  // haven't run `bun install` (fossilize is downloaded on demand).
-  const localFossilize = join(
-    repoRoot,
-    "node_modules",
-    ".bin",
-    process.platform === "win32" ? "fossilize.cmd" : "fossilize",
+  // Resolve fossilize's CLI entry from the gateway package's
+  // devDependencies, then invoke it via `node <cli.js>`. This works
+  // on all platforms and with any package manager layout.
+  const gatewayRequire = createRequire(`${packageDir}/`);
+  const fossilizePkgDir = dirname(
+    gatewayRequire.resolve("fossilize/package.json"),
   );
-  const useLocal = existsSync(localFossilize);
-  const fossilizeBin = useLocal ? localFossilize : "npx";
+  const fossilizePkgJson = JSON.parse(
+    readFileSync(join(fossilizePkgDir, "package.json"), "utf-8"),
+  ) as { bin?: Record<string, string> | string };
+  const fossilizeBinRel =
+    typeof fossilizePkgJson.bin === "string"
+      ? fossilizePkgJson.bin
+      : fossilizePkgJson.bin?.fossilize;
+  if (!fossilizeBinRel) {
+    console.error("✗ fossilize package has no bin entry");
+    process.exit(1);
+  }
+  const fossilizeCli = join(fossilizePkgDir, fossilizeBinRel);
   const fossilizeArgs: string[] = [
-    ...(useLocal ? [] : ["--yes", "fossilize"]),
+    fossilizeCli,
     bundlePath,
     "--no-bundle",
     "--hole-punch",
@@ -604,7 +621,7 @@ async function buildBinary() {
   console.log(
     `→ fossilize: ${targets.length} platform(s), ${Object.keys(manifest).length} asset(s)`,
   );
-  const result = spawnSync(fossilizeBin, fossilizeArgs, {
+  const result = spawnSync(process.execPath, fossilizeArgs, {
     cwd: packageDir,
     stdio: "inherit",
   });
