@@ -18,9 +18,11 @@ export default defineConfig({
       title: "Lore",
       components: {
         Header: "./src/components/SiteHeader.astro",
+        MobileMenuFooter: "./src/components/MobileMenuFooter.astro",
       },
       logo: {
-        src: "./public/brand-mark.svg",
+        light: "./public/brand-mark-light.svg",
+        dark: "./public/brand-mark.svg",
         alt: "Lore.AI",
         replacesTitle: true,
       },
