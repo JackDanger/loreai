@@ -70,7 +70,11 @@ import type {
   SessionState,
   UpstreamSnapshot,
 } from "./translate/types";
-import { blocksToText, forwardClientHeaders } from "./translate/types";
+import {
+  blocksToText,
+  forwardClientHeaders,
+  ZERO_USAGE,
+} from "./translate/types";
 import type { GatewayConfig } from "./config";
 import {
   getProjectPath,
@@ -2543,13 +2547,16 @@ function nonStreamHttpResponse(
   clientStream?: boolean,
   extraHeaders?: Record<string, string>,
 ): Response {
+  // Guard: resp.usage can be undefined at runtime for vLLM / partial responses.
+  const usage = resp.usage ?? ZERO_USAGE;
+
   // Scale usage so the client's token total stays below auto-compact threshold.
   // postResponse() has already consumed the real values for calibration/bustRate.
   const scaledUsage = scaleUsageForClient({
-    input_tokens: resp.usage.inputTokens,
-    output_tokens: resp.usage.outputTokens,
-    cache_read_input_tokens: resp.usage.cacheReadInputTokens,
-    cache_creation_input_tokens: resp.usage.cacheCreationInputTokens,
+    input_tokens: usage.inputTokens,
+    output_tokens: usage.outputTokens,
+    cache_read_input_tokens: usage.cacheReadInputTokens,
+    cache_creation_input_tokens: usage.cacheCreationInputTokens,
   });
   const scaledResp: GatewayResponse = {
     ...resp,
@@ -2593,6 +2600,9 @@ function nonStreamHttpResponse(
  * Convert a GatewayResponse to a streaming SSE HTTP Response.
  */
 function streamHttpResponse(resp: GatewayResponse): Response {
+  // Guard: resp.usage can be undefined at runtime for vLLM / partial responses.
+  const usage = resp.usage ?? ZERO_USAGE;
+
   // Build the full SSE text for a text-only response
   const textBlocks = resp.content.filter(
     (b): b is { type: "text"; text: string } => b.type === "text",
@@ -2600,8 +2610,8 @@ function streamHttpResponse(resp: GatewayResponse): Response {
   const fullText = textBlocks.map((b) => b.text).join("");
 
   const sseBody = buildSSETextResponse(resp.id, resp.model, fullText, {
-    inputTokens: resp.usage.inputTokens,
-    outputTokens: resp.usage.outputTokens,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
   });
 
   return new Response(sseBody, {
@@ -2634,21 +2644,24 @@ function postResponse(
 ): void {
   const { sessionID, projectPath } = sessionState;
 
+  // Guard: resp.usage can be undefined at runtime for vLLM / partial responses.
+  const usage = resp.usage ?? ZERO_USAGE;
+
   try {
     // --- Calibrate overhead from real token counts ---
     const actualInput =
-      (resp.usage.inputTokens ?? 0) +
-      (resp.usage.cacheReadInputTokens ?? 0) +
-      (resp.usage.cacheCreationInputTokens ?? 0);
+      (usage.inputTokens ?? 0) +
+      (usage.cacheReadInputTokens ?? 0) +
+      (usage.cacheCreationInputTokens ?? 0);
     calibrate(actualInput, sessionID, getLastTransformedCount(sessionID));
 
     // --- Sentry cache context + cost metric ---
-    setSentryCacheContext(resp.usage);
+    setSentryCacheContext(usage);
     const usageForSentry: AnthropicUsage = {
-      input_tokens: resp.usage.inputTokens,
-      output_tokens: resp.usage.outputTokens,
-      cache_read_input_tokens: resp.usage.cacheReadInputTokens,
-      cache_creation_input_tokens: resp.usage.cacheCreationInputTokens,
+      input_tokens: usage.inputTokens,
+      output_tokens: usage.outputTokens,
+      cache_read_input_tokens: usage.cacheReadInputTokens,
+      cache_creation_input_tokens: usage.cacheCreationInputTokens,
     };
     emitCostMetric(
       resp.model,
@@ -2673,7 +2686,7 @@ function postResponse(
       const turnAnalysis = analyzeCacheTurn(
         sessionState.cacheAnalytics,
         requestBody,
-        resp.usage,
+        usage,
         sessionID,
         sessionState.messageCount,
       );
@@ -2692,14 +2705,14 @@ function postResponse(
       }
       emitCacheBustMetric(
         bustCause,
-        resp.usage.cacheCreationInputTokens ?? 0,
+        usage.cacheCreationInputTokens ?? 0,
         resp.model,
       );
       sessionState.lastTurnWasIdle = false; // consumed
 
       // Track cold-cache turns for auto-TTL upgrade (rolling 20-turn window)
-      const cacheRead = resp.usage.cacheReadInputTokens ?? 0;
-      const cacheCreation = resp.usage.cacheCreationInputTokens ?? 0;
+      const cacheRead = usage.cacheReadInputTokens ?? 0;
+      const cacheCreation = usage.cacheCreationInputTokens ?? 0;
       const isColdTurn = cacheRead === 0 && cacheCreation > 0;
       if (!sessionState.coldCacheWindow) sessionState.coldCacheWindow = [];
       sessionState.coldCacheWindow.push(isColdTurn);
@@ -2715,9 +2728,9 @@ function postResponse(
 
     // --- Consecutive bust tracking for tier-based decisions ---
     recordCacheUsage(
-      resp.usage.cacheCreationInputTokens ?? 0,
-      resp.usage.cacheReadInputTokens ?? 0,
-      resp.usage.inputTokens ?? 0,
+      usage.cacheCreationInputTokens ?? 0,
+      usage.cacheReadInputTokens ?? 0,
+      usage.inputTokens ?? 0,
       sessionState.sessionID,
     );
 
@@ -2779,7 +2792,7 @@ function postResponse(
         [{ role: "assistant", content: assistantContent }],
         sessionID,
       )[0];
-      updateAssistantMessageTokens(assistantMsg, resp.usage, resp.model);
+      updateAssistantMessageTokens(assistantMsg, usage, resp.model);
       if (assistantContent.length > 0) {
         temporal.store({
           projectPath,
@@ -2814,10 +2827,10 @@ function postResponse(
     // --- Output tracking for dynamic max_tokens sizing ---
     sessionState.lastStopReason = resp.stopReason;
     sessionState.lastInputTokens =
-      (resp.usage.inputTokens ?? 0) +
-      (resp.usage.cacheReadInputTokens ?? 0) +
-      (resp.usage.cacheCreationInputTokens ?? 0);
-    const outputTokens = resp.usage.outputTokens;
+      (usage.inputTokens ?? 0) +
+      (usage.cacheReadInputTokens ?? 0) +
+      (usage.cacheCreationInputTokens ?? 0);
+    const outputTokens = usage.outputTokens;
     if (outputTokens > 0) {
       const EMA_ALPHA = 0.3;
       sessionState.outputTokensEMA =
@@ -2874,7 +2887,7 @@ function postResponse(
           );
           // Record counterfactual savings: without warming, these cache
           // reads would have been full cache writes.
-          const cacheRead = resp.usage.cacheReadInputTokens ?? 0;
+          const cacheRead = usage.cacheReadInputTokens ?? 0;
           if (cacheRead > 0) {
             recordWarmupHit(
               sessionID,
@@ -2896,7 +2909,7 @@ function postResponse(
       if (!warmupHitThisTurn) {
         const requestGap = now - sessionState.lastRequestTime;
         if (requestGap > 300_000) {
-          const cacheRead = resp.usage.cacheReadInputTokens ?? 0;
+          const cacheRead = usage.cacheReadInputTokens ?? 0;
           if (cacheRead > 0) {
             recordTTLSavings(sessionID, req.model, cacheRead);
           }
@@ -2973,7 +2986,7 @@ function postResponse(
     updateShadowContext(
       sessionID,
       actualInput,
-      resp.usage.outputTokens ?? 0,
+      usage.outputTokens ?? 0,
       getWorkerModel(sessionState.lastUpstream)?.modelID ?? "unknown",
       req.model,
       sessionState.resolvedConversationTTL,
@@ -4616,7 +4629,7 @@ async function handleConversationTurn(
     let currentResp = resp;
     let recallDepth = 0;
     let currentModifiedReq = modifiedReq;
-    const cumulativeUsage = { ...resp.usage };
+    const cumulativeUsage = { ...(resp.usage ?? ZERO_USAGE) };
 
     while (hasRecallToolUse(currentResp) && recallDepth < MAX_RECALL_DEPTH) {
       recallDepth++;
@@ -4740,17 +4753,18 @@ async function handleConversationTurn(
       const { continuation: continuationResp, followUp } = jsonFollowUp;
 
       // Accumulate usage from this iteration
-      cumulativeUsage.inputTokens += continuationResp.usage.inputTokens;
-      cumulativeUsage.outputTokens += continuationResp.usage.outputTokens;
-      if (continuationResp.usage.cacheReadInputTokens) {
+      const contUsage = continuationResp.usage ?? ZERO_USAGE;
+      cumulativeUsage.inputTokens += contUsage.inputTokens;
+      cumulativeUsage.outputTokens += contUsage.outputTokens;
+      if (contUsage.cacheReadInputTokens) {
         cumulativeUsage.cacheReadInputTokens =
           (cumulativeUsage.cacheReadInputTokens ?? 0) +
-          continuationResp.usage.cacheReadInputTokens;
+          contUsage.cacheReadInputTokens;
       }
-      if (continuationResp.usage.cacheCreationInputTokens) {
+      if (contUsage.cacheCreationInputTokens) {
         cumulativeUsage.cacheCreationInputTokens =
           (cumulativeUsage.cacheCreationInputTokens ?? 0) +
-          continuationResp.usage.cacheCreationInputTokens;
+          contUsage.cacheCreationInputTokens;
       }
 
       // Update for next iteration
