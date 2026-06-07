@@ -579,52 +579,41 @@ async function buildBinary() {
   //   our "linux-x64"    → fossilize "linux-x64" (same)
   const fossilizeTarget = (t: CompileTarget): string =>
     t.startsWith("windows") ? t.replace("windows", "win") : t;
-  const platformArgs = targets.map(fossilizeTarget).join(",");
-  // Resolve fossilize's CLI entry from the gateway package's
-  // devDependencies, then invoke it via `node <cli.js>`. This works
-  // on all platforms and with any package manager layout.
+  // Use fossilize's programmatic API
+  // Resolve fossilize's implementation dynamically to avoid hardcoded pnpm store path
   const gatewayRequire = createRequire(`${packageDir}/`);
   const fossilizePkgDir = dirname(
     gatewayRequire.resolve("fossilize/package.json"),
   );
-  const fossilizePkgJson = JSON.parse(
-    readFileSync(join(fossilizePkgDir, "package.json"), "utf-8"),
-  ) as { bin?: Record<string, string> | string };
-  const fossilizeBinRel =
-    typeof fossilizePkgJson.bin === "string"
-      ? fossilizePkgJson.bin
-      : fossilizePkgJson.bin?.fossilize;
-  if (!fossilizeBinRel) {
-    console.error("✗ fossilize package has no bin entry");
-    process.exit(1);
-  }
-  const fossilizeCli = join(fossilizePkgDir, fossilizeBinRel);
-  const fossilizeArgs: string[] = [
-    fossilizeCli,
-    bundlePath,
-    "--no-bundle",
-    "--hole-punch",
-    "--node-version",
-    "lts",
-    "--platforms",
-    platformArgs,
-    "--output-name",
-    "lore",
-    "--out-dir",
-    distBinDir,
-    "--asset-manifest",
-    manifestPath,
-  ];
+  // @ts-ignore - fossilize doesn't have proper typedefs but works at runtime
+  const fossilize = require(join(fossilizePkgDir, "dist", "impl-7RS2FY5C.js"));
+  
+  const fossilizeContext = {
+    process,
+    os: require("node:os"),
+    fs: require("node:fs"),
+    path: require("node:path"),
+  };
+  const fossilizeFlags = {
+    nodeVersion: "lts",
+    platforms: targets.map(fossilizeTarget),
+    noBundle: true,
+    holePunch: true,
+    outputName: "lore",
+    outDir: distBinDir,
+    assetManifest: manifestPath,
+    // Don't sign here - we'll handle signing/renaming manually like before
+    sign: false,
+    concurrencyLimit: 3,
+  };
 
   console.log(
     `→ fossilize: ${targets.length} platform(s), ${Object.keys(manifest).length} asset(s)`,
   );
-  const result = spawnSync(process.execPath, fossilizeArgs, {
-    cwd: packageDir,
-    stdio: "inherit",
-  });
-  if (result.status !== 0) {
-    console.error(`✗ fossilize failed (exit ${result.status})`);
+  try {
+    await fossilize.default.call(fossilizeContext, fossilizeFlags, bundlePath);
+  } catch (err) {
+    console.error("✗ fossilize failed:", err);
     process.exit(1);
   }
 
