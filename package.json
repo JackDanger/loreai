@@ -11,7 +11,7 @@
   "packageManager": "pnpm@10.28.0",
   "scripts": {
     "typecheck": "pnpm -r run typecheck",
-    "test": "bun test",
+    "test": "vitest run",
     "build": "pnpm -r run build",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
@@ -21,7 +21,6 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.16",
-    "@types/bun": "^1.2.0",
     "esbuild": "^0.25.12",
     "fast-check": "^4.5.3",
     "tsx": "^4.22.3",
