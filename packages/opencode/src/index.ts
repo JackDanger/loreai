@@ -122,13 +122,44 @@ let processInitDone = false;
 let processLoreActive = false;
 let processLoreBase = "";
 
-// Updated per plugin call so the fetch interceptor's getHeaders() callback
-// can reference the latest session's project context.
+// Per-project state. The OpenCode plugin function can be called multiple
+// times in the same process (different projects, or after a project switch),
+// so we track each project's path + git remote in a Map keyed by
+// `ctx.project.id`. This prevents the "last project wins" race where a
+// request from project A gets attributed to project B's path because a
+// sub-agent or new project init overwrote the global between turns.
+//
+// `currentProjectPath`/`currentGitRemote` are kept as fallbacks for the
+// fetch interceptor's `getHeaders()` callback, which doesn't have access
+// to the request's session ID and so can't pick the right Map entry. The
+// chat.headers hook is preferred (it sets the header directly per-request
+// using the right Map entry) — `getHeaders()` only fires when a request
+// bypasses the chat.headers hook.
 let currentProjectPath = "";
 let currentGitRemote = "";
 
-// Cached git remote URL — computed once per process.
-let cachedGitRemote: string | undefined;
+/** project.id → { projectPath, gitRemote, lastSeenAt } */
+const projectState = new Map<
+  string,
+  { projectPath: string; gitRemote: string; lastSeenAt: number }
+>();
+
+/** Stale-entry threshold: 24 hours. Generous to avoid re-running
+ * `getGitRemote()` when a user resumes after sleep/long break.
+ * Each entry is ~200 bytes — even 100 projects would be 20 KB. */
+const SESSION_STATE_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Drop project entries that haven't been seen in SESSION_STATE_TTL_MS to
+ * prevent unbounded growth in long-lived processes. Called opportunistically
+ * whenever a new entry is registered.
+ */
+function reapStaleProjectState(): void {
+  const cutoff = Date.now() - SESSION_STATE_TTL_MS;
+  for (const [id, entry] of projectState) {
+    if (entry.lastSeenAt < cutoff) projectState.delete(id);
+  }
+}
 
 /** Memoized lore init promise — ensures concurrent plugin calls don't race. */
 let loreInitPromise: Promise<string | null> | null = null;
@@ -187,17 +218,32 @@ export const LorePlugin: Plugin = async (ctx) => {
     }
   }
 
-  // Cache the git remote URL once per process (computed lazily on first call).
-  // Avoids spawning `git remote -v` on every turn.
-  if (cachedGitRemote === undefined) {
-    const projectPath = discoverWorkspaceRoot(ctx.worktree || ctx.directory);
-    cachedGitRemote = getGitRemote(projectPath) ?? "";
-  }
+  // Compute and register THIS project's state. The Map is keyed by
+  // `ctx.project.id` so concurrent projects in the same process (e.g.,
+  // worktrees opened in parallel) don't clobber each other.
+  const thisProjectPath = discoverWorkspaceRoot(ctx.worktree || ctx.directory);
 
-  // Update module-level context so the fetch interceptor's getHeaders()
-  // callback always returns the latest session's project info.
-  currentProjectPath = discoverWorkspaceRoot(ctx.worktree || ctx.directory);
-  currentGitRemote = cachedGitRemote;
+  // Resolve git remote per-project. Re-use the cached value when the same
+  // project is seen again (avoids spawning `git remote -v` every turn).
+  const existingState = projectState.get(ctx.project.id);
+  const thisGitRemote =
+    existingState?.projectPath === thisProjectPath
+      ? existingState.gitRemote
+      : (getGitRemote(thisProjectPath) ?? "");
+
+  projectState.set(ctx.project.id, {
+    projectPath: thisProjectPath,
+    gitRemote: thisGitRemote,
+    lastSeenAt: Date.now(),
+  });
+  reapStaleProjectState();
+
+  // Module-level fallback (used only when chat.headers is bypassed).
+  // Updated on every plugin call so the most-recently-active project wins
+  // for fetches that arrive without a known session ID (e.g., direct
+  // SDK fetches that skip the plugin's chat.headers hook).
+  currentProjectPath = thisProjectPath;
+  currentGitRemote = thisGitRemote;
 
   try {
     const hooks: Hooks = {
@@ -235,6 +281,19 @@ export const LorePlugin: Plugin = async (ctx) => {
         // unlike x-session-affinity (nanoid regenerated per process).
         output.headers["x-lore-session-id"] = input.sessionID;
         output.headers["x-lore-agent"] = input.agent;
+        // Inject project path + git remote for THIS request based on the
+        // current plugin's project. Setting it here (rather than relying on
+        // the fetch interceptor's getHeaders() global) ensures that
+        // concurrent sub-agents or sibling projects in the same OpenCode
+        // process don't have their paths clobbered. The fetch interceptor
+        // still sets a fallback via getHeaders() for requests that bypass
+        // this hook (e.g., embedding/image generation).
+        if (thisProjectPath) {
+          output.headers["x-lore-project"] = thisProjectPath;
+        }
+        if (thisGitRemote) {
+          output.headers["x-lore-git-remote"] = thisGitRemote;
+        }
         // Inject provider ID so the gateway uses provider-based routing
         // (correct protocol + upstream URL) instead of model-prefix guessing.
         // OpenCode's plugin SDK types don't expose `.id` on the provider

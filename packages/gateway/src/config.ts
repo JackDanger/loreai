@@ -89,8 +89,27 @@ export interface GatewayConfig {
    *
    * Note: hosted mode (`LORE_HOSTED_MODE`) implies remote-gateway behavior —
    * a hosted gateway never shares a filesystem with its clients.
+   *
+   * Auto-detection: when neither `LORE_REMOTE_GATEWAY` nor `LORE_HOSTED_MODE`
+   * is set, the gateway auto-enables remote-gateway mode if its bind
+   * address(es) include any non-loopback host. This catches the common
+   * case of running a long-lived gateway on a server (Tailscale, LAN IP,
+   * `0.0.0.0`, etc.) without requiring an explicit env var.
    */
   remoteGateway: boolean;
+  /**
+   * `true` when `remoteGateway` was inferred from the bind address rather
+   * than set explicitly via env var. Surfaced in the gateway boot log so
+   * users can verify the auto-detection. Internal — not part of the public
+   * config surface.
+   */
+  remoteGatewayAutoDetected?: boolean;
+  /**
+   * `true` when `remoteGateway` was set by the CLI command's default (e.g.
+   * `lore start` defaults to remote mode) rather than by env var or bind
+   * address. Surfaced in the gateway boot log. Internal.
+   */
+  remoteGatewayCommandDefault?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -100,10 +119,24 @@ export interface GatewayConfig {
 /** Load gateway configuration from environment variables with defaults. */
 export function loadConfig(): GatewayConfig {
   const env = process.env;
+  const hosts = parseHosts(env.LORE_LISTEN_HOST);
+  const remoteGatewayEnv = isTruthy(env.LORE_REMOTE_GATEWAY);
+  const hostedModeEnv = isTruthy(env.LORE_HOSTED_MODE);
+  // Auto-detect when neither env var is DEFINED (not just truthy): a
+  // non-loopback bind address strongly implies the gateway is serving remote
+  // clients (Tailscale, LAN, `0.0.0.0`, public IP). This prevents the
+  // "lore-config" bug from re-emerging on long-running server deployments
+  // that forgot to set `LORE_REMOTE_GATEWAY=1`.
+  // IMPORTANT: check for `in` (defined), not truthiness. `LORE_REMOTE_GATEWAY=0`
+  // is an explicit disable — auto-detection must NOT override it.
+  const remoteGatewayDefined = "LORE_REMOTE_GATEWAY" in env;
+  const hostedModeDefined = "LORE_HOSTED_MODE" in env;
+  const autoDetected =
+    !remoteGatewayDefined && !hostedModeDefined && hasNonLoopbackHost(hosts);
   return {
     port: parsePort(env.LORE_LISTEN_PORT, DEFAULT_PORT),
     portExplicit: !!env.LORE_LISTEN_PORT,
-    hosts: parseHosts(env.LORE_LISTEN_HOST),
+    hosts,
     upstreamAnthropic: trimTrailingSlash(
       env.LORE_UPSTREAM_ANTHROPIC || "https://api.anthropic.com",
     ),
@@ -119,14 +152,15 @@ export function loadConfig(): GatewayConfig {
     remoteUrl: env.LORE_REMOTE_URL
       ? trimTrailingSlash(env.LORE_REMOTE_URL)
       : undefined,
-    hostedMode: isTruthy(env.LORE_HOSTED_MODE),
+    hostedMode: hostedModeEnv,
     workerApiKey: env.LORE_WORKER_API_KEY || undefined,
     workerUpstream: env.LORE_WORKER_UPSTREAM
       ? trimTrailingSlash(env.LORE_WORKER_UPSTREAM)
       : undefined,
     // Hosted mode is always a remote gateway (no shared filesystem with clients).
-    remoteGateway:
-      isTruthy(env.LORE_REMOTE_GATEWAY) || isTruthy(env.LORE_HOSTED_MODE),
+    // Auto-detect from bind address when neither flag is explicitly set.
+    remoteGateway: remoteGatewayEnv || hostedModeEnv || autoDetected,
+    remoteGatewayAutoDetected: autoDetected,
   };
 }
 
@@ -640,6 +674,29 @@ function parseHosts(value: string | undefined): string[] {
     .map((h) => h.trim())
     .filter(Boolean);
   return hosts.length ? hosts : ["127.0.0.1"];
+}
+
+/**
+ * Return true if any host in the bind list is a non-loopback address — the
+ * strongest signal we have (without DNS lookups) that the gateway is
+ * serving clients on other machines. Used to auto-enable `remoteGateway`
+ * mode when neither `LORE_REMOTE_GATEWAY` nor `LORE_HOSTED_MODE` is set.
+ *
+ * Loopback variants covered: `127.0.0.0/8`, `::1`, `localhost`. `0.0.0.0`
+ * and `::` (unspecified) are treated as non-loopback because they bind
+ * on all interfaces and are the canonical "long-running server" bind.
+ */
+export function hasNonLoopbackHost(hosts: string[]): boolean {
+  for (const raw of hosts) {
+    const h = raw.toLowerCase().trim();
+    if (!h) continue;
+    if (h === "localhost") continue;
+    if (h === "::1" || h === "[::1]") continue;
+    if (h.startsWith("127.")) continue;
+    // 0.0.0.0 / :: — bind on all interfaces, treat as non-loopback.
+    return true;
+  }
+  return false;
 }
 
 function trimTrailingSlash(url: string): string {
