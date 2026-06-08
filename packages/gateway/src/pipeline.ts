@@ -157,6 +157,7 @@ import {
 } from "./auth";
 import type { UpstreamInterceptor } from "./recorder";
 import { startIdleScheduler, buildIdleWorkHandler } from "./idle";
+import { makeWorkerHealth } from "./worker-health";
 import {
   getWorkerModel,
   resetWorkerModelState,
@@ -3070,6 +3071,7 @@ function scheduleBackgroundWork(
             model,
             skipMeta: true,
             callType: batchQueueEnabled ? "batch" : "direct",
+            workerHealth: makeWorkerHealth(sessionID, "lore-distill"),
           }),
         `incremental-distill session=${sessionID.slice(0, 16)}`,
       ).catch((e) => log.error("background distillation failed:", e));
@@ -3105,7 +3107,14 @@ function scheduleBackgroundWork(
             op: "lore.curation",
             attributes: { trigger: "in-flight" },
           },
-          () => curator.run({ llm, projectPath, sessionID, model }),
+          () =>
+            curator.run({
+              llm,
+              projectPath,
+              sessionID,
+              model,
+              workerHealth: makeWorkerHealth(sessionID, "lore-curator"),
+            }),
         ),
       `in-flight-curation session=${sessionID.slice(0, 16)}`,
     )
@@ -3165,6 +3174,7 @@ export async function generateCompactionSummary(opts: {
     force: true,
     urgent: true,
     callType: "direct",
+    workerHealth: makeWorkerHealth(sessionID, "lore-distill"),
   });
 
   // 2. Load distillation summaries
@@ -5325,6 +5335,7 @@ async function handleCurateSlashCommand(
       skipMeta: true,
       urgent: true,
       callType: "direct",
+      workerHealth: makeWorkerHealth(sessionID, "lore-distill"),
     });
     distilled = dResult.distilled;
   } catch (e) {
@@ -5336,7 +5347,13 @@ async function handleCurateSlashCommand(
   let updated = 0;
   let deleted = 0;
   try {
-    const cResult = await curator.run({ llm, projectPath, sessionID, model });
+    const cResult = await curator.run({
+      llm,
+      projectPath,
+      sessionID,
+      model,
+      workerHealth: makeWorkerHealth(sessionID, "lore-curator"),
+    });
     created = cResult.created;
     updated = cResult.updated;
     deleted = cResult.deleted;

@@ -248,6 +248,8 @@ export function applyOps(
     detectedEntities?: DetectedEntity[];
     /** Relations detected by the curator from conversation context. */
     detectedRelations?: DetectedRelation[];
+    /** Worker model that produced these ops (for v35 source attribution). */
+    workerModel?: { providerID: string; modelID: string };
   },
 ): {
   created: number;
@@ -281,6 +283,8 @@ export function applyOps(
         scope: op.scope,
         crossProject: op.crossProject ?? true,
         confidence: op.confidence,
+        workerProviderID: input.workerModel?.providerID,
+        workerModelID: input.workerModel?.modelID,
       });
       idsToSync.push(id);
       created++;
@@ -416,6 +420,12 @@ export async function run(input: {
   projectPath: string;
   sessionID: string;
   model?: { providerID: string; modelID: string };
+  /** Optional gateway worker-health hook — called when the LLM call returns
+   *  null. The gateway uses this to escalate to Sentry after sustained failure. */
+  workerHealth?: {
+    recordFailure(reason: string): void;
+    recordSuccess(): void;
+  };
 }): Promise<{
   created: number;
   updated: number;
@@ -462,6 +472,10 @@ async function runInner(input: {
   projectPath: string;
   sessionID: string;
   model?: { providerID: string; modelID: string };
+  workerHealth?: {
+    recordFailure(reason: string): void;
+    recordSuccess(): void;
+  };
 }): Promise<{
   created: number;
   updated: number;
@@ -602,7 +616,8 @@ async function runInner(input: {
     maxTokens: 2048,
     temperature: 0,
   });
-  if (!responseText)
+  if (!responseText) {
+    input.workerHealth?.recordFailure("no-response");
     return {
       created: 0,
       updated: 0,
@@ -610,8 +625,13 @@ async function runInner(input: {
       entitiesCreated: 0,
       relationsCreated: 0,
     };
+  }
 
   const response = parseResponse(responseText);
+  // Record success only AFTER parsing — parseResponse() silently swallows
+  // malformed JSON into empty ops. Recording success before parse would clear
+  // the health state, making sustained parse failures invisible.
+  input.workerHealth?.recordSuccess();
 
   // Gate entry creation when at or above maxEntries to prevent the ratchet
   // effect: curation creates entries → count exceeds limit → consolidation
@@ -632,6 +652,7 @@ async function runInner(input: {
     skipCreate: atLimit,
     detectedEntities: response.entities,
     detectedRelations: response.relations,
+    workerModel: input.model,
   });
 
   // Post-curation dedup sweep: if the curator created new entries, check for
@@ -855,6 +876,10 @@ export async function consolidate(input: {
   projectPath: string;
   sessionID: string;
   model?: { providerID: string; modelID: string };
+  workerHealth?: {
+    recordFailure(reason: string): void;
+    recordSuccess(): void;
+  };
 }): Promise<{ updated: number; deleted: number }> {
   const cfg = config();
   if (!cfg.curator.enabled) return { updated: 0, deleted: 0 };
@@ -925,13 +950,19 @@ export async function consolidate(input: {
       temperature: 0,
     },
   );
-  if (!responseText) return { updated: 0, deleted: 0 };
+  if (!responseText) {
+    input.workerHealth?.recordFailure("no-response");
+    return { updated: 0, deleted: 0 };
+  }
 
   const ops = parseOps(responseText);
+  // Record success after parsing (see runInner for rationale).
+  input.workerHealth?.recordSuccess();
   const result = applyOps(ops, {
     projectPath: input.projectPath,
     sessionID: input.sessionID,
     skipCreate: true, // Consolidation must not add entries.
+    workerModel: input.model,
   });
 
   return { updated: result.updated, deleted: result.deleted };

@@ -32,6 +32,7 @@ import {
   curatorLimiter,
 } from "@loreai/core";
 import type { LLMClient } from "@loreai/core";
+import { makeWorkerHealth } from "./worker-health";
 import type { GatewayConfig } from "./config";
 import type { SessionState } from "./translate/types";
 import { getWorkerModel, getModelEntrySync } from "./worker-model";
@@ -484,6 +485,7 @@ export function buildIdleWorkHandler(
           force: true,
           skipMeta: true,
           callType,
+          workerHealth: makeWorkerHealth(sessionID, "lore-distill"),
         });
       }
       // Meta consolidation: safe on idle because cache is already cold.
@@ -505,6 +507,7 @@ export function buildIdleWorkHandler(
           sessionID,
           model,
           callType,
+          workerHealth: makeWorkerHealth(sessionID, "lore-distill"),
         });
       }
     } catch (e) {
@@ -528,7 +531,14 @@ export function buildIdleWorkHandler(
               op: "lore.curation",
               attributes: { trigger: "idle" },
             },
-            () => curator.run({ llm, projectPath, sessionID, model }),
+            () =>
+              curator.run({
+                llm,
+                projectPath,
+                sessionID,
+                model,
+                workerHealth: makeWorkerHealth(sessionID, "lore-curator"),
+              }),
           );
           state.turnsSinceCuration = 0;
           saveSessionTracking(sessionID, { turnsSinceCuration: 0 });
@@ -575,7 +585,14 @@ export function buildIdleWorkHandler(
                 op: "lore.curation",
                 attributes: { trigger: "consolidation" },
               },
-              () => curator.consolidate({ llm, projectPath, sessionID, model }),
+              () =>
+                curator.consolidate({
+                  llm,
+                  projectPath,
+                  sessionID,
+                  model,
+                  workerHealth: makeWorkerHealth(sessionID, "lore-curator"),
+                }),
             );
             if (result.updated > 0 || result.deleted > 0) {
               log.info(
