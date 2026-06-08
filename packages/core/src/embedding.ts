@@ -327,8 +327,17 @@ class LocalProvider implements EmbeddingProvider {
         let workerUrl: string | URL;
         if (typeof __filename === "string") {
           const { pathToFileURL } = await import("node:url");
+          // Match the sibling worker file extension to the current bundle:
+          //   .ts  → dev (vitest/tsx)
+          //   .cjs → gateway CJS npm bundle
+          //   .js  → core ESM npm bundle (fallback)
+          const workerExt = __filename.endsWith(".ts")
+            ? ".ts"
+            : __filename.endsWith(".cjs")
+              ? ".cjs"
+              : ".js";
           workerUrl = new URL(
-            "./embedding-worker.cjs",
+            `./embedding-worker${workerExt}`,
             pathToFileURL(__filename),
           );
         } else {
@@ -516,7 +525,8 @@ class LocalProvider implements EmbeddingProvider {
   }
 
   /** Shut down the worker thread. Called by `resetProvider()` on config change.
-   *  Sends a shutdown message so the worker calls `process.exit(0)` internally.
+   *  Sends a shutdown message so the worker drains in-flight work and exits
+   *  via a deferred `process.exit(0)` (lets NAPI callbacks unwind safely).
    *
    *  Returns a promise that resolves once the worker has fully exited. Callers
    *  that need a clean teardown (tests, config change) should await the result.

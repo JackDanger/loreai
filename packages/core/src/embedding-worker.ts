@@ -21,14 +21,12 @@
  */
 
 import { parentPort, workerData } from "node:worker_threads";
-import {
-  isOomError,
-  isWasmFatalError,
-  type WorkerInbound,
-  type WorkerOutbound,
-  type WorkerInitData,
-  type EmbedRequest,
-} from "./embedding-worker-types";
+import type {
+  WorkerInbound,
+  WorkerOutbound,
+  WorkerInitData,
+  EmbedRequest,
+} from "./embedding-worker-types.js";
 
 // ---------------------------------------------------------------------------
 // workerData
@@ -57,6 +55,30 @@ const OOM_RETRY_START_TOKENS = 4096;
  *  try). On OOM the token limit halves each retry: full → 4096 → 2048 → 1024.
  *  Three truncated retries covers extreme cases. */
 const OOM_MAX_RETRIES = 3;
+
+// ---------------------------------------------------------------------------
+// Error classifiers — inlined to keep the worker self-contained.
+// ---------------------------------------------------------------------------
+// The canonical copy lives in embedding-worker-types.ts and is imported by
+// the main thread (embedding.ts). The worker thread is spawned by Node's
+// native ESM resolver (not Vite), which cannot map internal "./foo.js"
+// imports back to "./foo.ts" source files. Inlining avoids the import
+// entirely. Keep in sync with embedding-worker-types.ts.
+
+/** Detect ONNX runtime out-of-memory errors. */
+function isOomError(msg: string): boolean {
+  if (/^\d{6,}$/.test(msg)) return true;
+  if (/out.of.memory|alloc.*fail|oom/i.test(msg)) return true;
+  return false;
+}
+
+/** Detect fatal WASM/ONNX runtime errors (abort, unreachable, OOM). */
+function isWasmFatalError(msg: string): boolean {
+  if (/\bAborted\b/i.test(msg)) return true;
+  if (/\bRuntimeError\b/.test(msg)) return true;
+  if (isOomError(msg)) return true;
+  return false;
+}
 
 // ---------------------------------------------------------------------------
 // Model lifecycle — lazy init on first embed request
@@ -234,7 +256,7 @@ async function drain(): Promise<void> {
   if (processing) return;
   processing = true;
 
-  while (queue.length > 0) {
+  while (queue.length > 0 && !shutdownRequested) {
     const req = queue.shift();
     if (!req) break;
     await processEmbed(req);
@@ -319,6 +341,7 @@ async function runInference(texts: string[]): Promise<Float32Array[]> {
 }
 
 async function processEmbed(req: EmbedRequest): Promise<void> {
+  inflight++;
   try {
     await ensurePipeline();
 
@@ -401,12 +424,29 @@ async function processEmbed(req: EmbedRequest): Promise<void> {
         : raw;
       post({ type: "error", id: req.id, error: msg });
     }
+  } finally {
+    inflight--;
+    maybeExit();
   }
 }
 
 // ---------------------------------------------------------------------------
-// Message handling
+// Shutdown handling
 // ---------------------------------------------------------------------------
+
+let inflight = 0;
+let shutdownRequested = false;
+
+function maybeExit(): void {
+  if (shutdownRequested && inflight === 0) {
+    // Deferred process.exit(0) lets any pending setImmediate / microtask
+    // callbacks (e.g. onnxruntime-node NAPI result conversion) complete
+    // before we tear down the V8 isolate.  A plain port.close() is not
+    // sufficient: native NAPI handles can keep the event loop alive
+    // indefinitely.
+    setTimeout(() => process.exit(0), 0);
+  }
+}
 
 function post(msg: WorkerOutbound): void {
   port.postMessage(msg);
@@ -415,10 +455,14 @@ function post(msg: WorkerOutbound): void {
 port.on("message", (msg: WorkerInbound) => {
   switch (msg.type) {
     case "embed":
-      enqueue(msg);
+      if (!shutdownRequested) {
+        enqueue(msg);
+      }
       break;
     case "shutdown":
-      process.exit(0);
+      shutdownRequested = true;
+      queue.length = 0; // Drop queued (not in-flight) requests.
+      maybeExit();
       break;
   }
 });
