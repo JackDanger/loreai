@@ -46,26 +46,18 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      # Node 22 avoids a Node 24 regression where extract-zip hangs during
-      # artifact unpacking, causing Craft to silently exit without publishing.
       # `registry-url` is required for npm OIDC trusted publishing — without
       # it, setup-node doesn't configure the authenticated .npmrc and
       # `npm publish` errors with ENEEDAUTH even though the workflow has
       # `id-token: write` permission.
       - uses: actions/setup-node@v6
         with:
-          node-version: 22
           registry-url: 'https://registry.npmjs.org'
-
-      # Craft's OIDC publishing requires npm >= 11.5.1. Node 22 ships with
-      # npm 10.x, so we upgrade npm explicitly.
-      - name: Upgrade npm for OIDC support
-        run: npm install -g npm@latest
 
       # Pin to a specific Craft version to avoid upstream regressions.
       - name: Install Craft
         env:
-          CRAFT_VERSION: '2.26.5'
+          CRAFT_VERSION: '2.26.9'
         run: |
           CRAFT_URL="https://github.com/getsentry/craft/releases/download/${CRAFT_VERSION}/craft"
           sudo curl -fsSL -o /usr/local/bin/craft "$CRAFT_URL"
