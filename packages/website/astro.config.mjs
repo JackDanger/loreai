@@ -1,9 +1,21 @@
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
-import { faviconAssets } from "./integrations/favicon-assets";
+import { fileURLToPath } from "node:url";
+import {
+  faviconAssets,
+  generateAssetsEagerly,
+} from "./integrations/favicon-assets";
 
 const prNumber = process.env.PR_NUMBER;
 const base = prNumber ? `/_preview/pr-${prNumber}/` : "/";
+
+// Run the favicon + OG asset generation synchronously at config-load
+// time so the Starlight head array can reference the (content-hashed)
+// OG image filename. Without this, the static head array would
+// hardcode a stale URL and Cloudflare/validators could cache the
+// wrong image indefinitely.
+const projectRoot = fileURLToPath(new URL(".", import.meta.url));
+const { ogFilename } = await generateAssetsEagerly(projectRoot);
 
 export default defineConfig({
   site: "https://withlore.ai",
@@ -89,6 +101,101 @@ export default defineConfig({
             rel: "apple-touch-icon",
             sizes: "180x180",
             href: `${base}apple-touch-icon.png`,
+          },
+        },
+        // Open Graph
+        {
+          tag: "meta",
+          attrs: {
+            property: "og:title",
+            content: "Lore Documentation",
+          },
+        },
+        {
+          tag: "meta",
+          attrs: {
+            property: "og:description",
+            content:
+              "Install, operate, and understand Lore's local-first memory layer for AI coding agents.",
+          },
+        },
+        {
+          tag: "meta",
+          attrs: {
+            property: "og:image",
+            content: `https://withlore.ai${base}${ogFilename}`,
+          },
+        },
+        {
+          tag: "meta",
+          attrs: {
+            property: "og:image:width",
+            content: "1200",
+          },
+        },
+        {
+          tag: "meta",
+          attrs: {
+            property: "og:image:height",
+            content: "630",
+          },
+        },
+        {
+          tag: "meta",
+          attrs: {
+            property: "og:image:alt",
+            content: "Lore.AI — Shared Context for AI Agents",
+          },
+        },
+        {
+          tag: "meta",
+          attrs: {
+            property: "og:type",
+            content: "website",
+          },
+        },
+        {
+          tag: "meta",
+          attrs: {
+            property: "og:site_name",
+            content: "Lore.AI",
+          },
+        },
+        // Twitter Card
+        {
+          tag: "meta",
+          attrs: {
+            name: "twitter:card",
+            content: "summary_large_image",
+          },
+        },
+        {
+          tag: "meta",
+          attrs: {
+            name: "twitter:title",
+            content: "Lore Documentation",
+          },
+        },
+        {
+          tag: "meta",
+          attrs: {
+            name: "twitter:description",
+            content:
+              "Install, operate, and understand Lore's local-first memory layer for AI coding agents.",
+          },
+        },
+        {
+          tag: "meta",
+          attrs: {
+            name: "twitter:image",
+            content: `https://withlore.ai${base}${ogFilename}`,
+          },
+        },
+        {
+          tag: "meta",
+          attrs: {
+            name: "twitter:site",
+            content: "@withLoreAI",
           },
         },
       ],
