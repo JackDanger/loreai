@@ -1,4 +1,230 @@
 # Changelog
+## 0.25.0
+
+### New Features ✨
+
+#### Cch
+
+- Add seeds for Claude Code up to 2.1.165 by @github-actions in [#567](https://github.com/BYK/loreai/pull/567)
+- Add seeds for Claude Code up to 2.1.163 by @github-actions in [#558](https://github.com/BYK/loreai/pull/558)
+- Add seeds for Claude Code up to 2.1.162 by @github-actions in [#525](https://github.com/BYK/loreai/pull/525)
+- Add seeds for Claude Code up to 2.1.161 by @github-actions in [#510](https://github.com/BYK/loreai/pull/510)
+- Add seeds for Claude Code up to 2.1.160 by @github-actions in [#492](https://github.com/BYK/loreai/pull/492)
+- Add seeds for Claude Code up to 2.1.153 by @github-actions in [#480](https://github.com/BYK/loreai/pull/480)
+- Add seeds for Claude Code up to 2.1.152 by @github-actions in [#471](https://github.com/BYK/loreai/pull/471)
+
+#### Core
+
+- Track cross-project knowledge transfer metrics (#506) by @BYK in [#531](https://github.com/BYK/loreai/pull/531)
+- Support non-English conversations (Turkish) by @BYK in [#522](https://github.com/BYK/loreai/pull/522)
+- Structured tool-call execution trace for richer pattern extraction by @BYK in [#521](https://github.com/BYK/loreai/pull/521)
+- Auto-promote knowledge recurring across 3+ projects by @BYK in [#505](https://github.com/BYK/loreai/pull/505)
+
+#### Core,Gateway
+
+- Add loreFile.enabled config toggle by @BYK in [#637](https://github.com/BYK/loreai/pull/637)
+- Worker attribution columns + health monitoring by @BYK in [#617](https://github.com/BYK/loreai/pull/617)
+
+#### Docs
+
+- Persona-based docs site + LORE_UPSTREAM_EXTRA_HEADERS by @BYK in [#625](https://github.com/BYK/loreai/pull/625)
+- Redesign Header & Logo by @sylncnr in [#508](https://github.com/BYK/loreai/pull/508)
+
+#### Gateway
+
+- Add setup handlers for opencode + claude-code by @BYK in [#650](https://github.com/BYK/loreai/pull/650)
+- Dynamic worker model discovery from models.dev for all providers by @BYK in [#622](https://github.com/BYK/loreai/pull/622)
+- Provider-ID-based upstream routing by @BYK in [#557](https://github.com/BYK/loreai/pull/557)
+
+#### Other
+
+- (build) Migrate standalone binary from Bun --compile to Node SEA via fossilize by @BYK in [#564](https://github.com/BYK/loreai/pull/564)
+- (entities) Embedding-based entity auto-dedup (#462) by @BYK in [#536](https://github.com/BYK/loreai/pull/536)
+- (quota) Integrate Anthropic OAuth usage/quota API by @BYK in [#509](https://github.com/BYK/loreai/pull/509)
+- (website) Migrate website to Astro by @sylncnr in [#559](https://github.com/BYK/loreai/pull/559)
+- Add `lore setup` command with Codex support by @BYK in [#514](https://github.com/BYK/loreai/pull/514)
+- Add multi-user attribution and team sync schema (v29) by @BYK in [#468](https://github.com/BYK/loreai/pull/468)
+- Worker credential routing and custom upstream by @BYK in [#482](https://github.com/BYK/loreai/pull/482)
+- Configurable session eviction timeout, sub-agent fast eviction, session-limiter cleanup by @BYK in [#478](https://github.com/BYK/loreai/pull/478)
+- Entity enrichment — metadata, relationships, and self-entity by @BYK in [#470](https://github.com/BYK/loreai/pull/470)
+- Daily budget throttling with rate-aware proxy sleep by @BYK in [#469](https://github.com/BYK/loreai/pull/469)
+- Add Hermes Agent integration (proxy + plugin) by @BYK in [#465](https://github.com/BYK/loreai/pull/465)
+- Entity registry with grounding pass and alias resolution by @BYK in [#460](https://github.com/BYK/loreai/pull/460)
+
+### Bug Fixes 🐛
+
+#### Ci
+
+- Remove empty `with:` from pnpm/action-setup in eval.yml by @BYK in [#610](https://github.com/BYK/loreai/pull/610)
+- Populate vendor model cache before tests to prevent HuggingFace 429s by @BYK in [#566](https://github.com/BYK/loreai/pull/566)
+- Make embedding tests resilient to HuggingFace download flakes by @BYK in [#528](https://github.com/BYK/loreai/pull/528)
+
+#### Core
+
+- IDF-aware relaxed cascade and long-query expansion cap by @BYK in [#639](https://github.com/BYK/loreai/pull/639)
+- Fix embedding worker init in vitest, graceful shutdown, remove silent test skips by @BYK in [#613](https://github.com/BYK/loreai/pull/613)
+- Recognize WASM fatal error wrapper prefix in isWasmFatalError() by @BYK in [#604](https://github.com/BYK/loreai/pull/604)
+- Guard against postMessage on terminated embedding worker by @BYK in [#603](https://github.com/BYK/loreai/pull/603)
+- Normalize provider API paths in fetch interceptor by @BYK in [#577](https://github.com/BYK/loreai/pull/577)
+- Replace O(N²) correlated subquery in metadata aggregation with JOIN by @BYK in [#570](https://github.com/BYK/loreai/pull/570)
+- Clean up knowledge_transfers on entry removal by @BYK in [#543](https://github.com/BYK/loreai/pull/543)
+
+#### Embedding
+
+- Use subquery for DISTINCT dedup in entity backfill SQL by @BYK in [#550](https://github.com/BYK/loreai/pull/550)
+- Stop OOM event storm, single-thread WASM, remove auto-fallback by @BYK in [#545](https://github.com/BYK/loreai/pull/545)
+
+#### Entities
+
+- Filter dismissed pairs from dashboard dedup suggestions by @BYK in [#598](https://github.com/BYK/loreai/pull/598)
+- Fix self/person merge, dashboard UX, and alias copy bug by @BYK in [#595](https://github.com/BYK/loreai/pull/595)
+
+#### Gateway
+
+- Strengthen .lore.md commit reminder in recall tool by @BYK in [#635](https://github.com/BYK/loreai/pull/635)
+- Only mark \_default stale when it holds the same credential as the stale provider by @BYK in [#633](https://github.com/BYK/loreai/pull/633)
+- Per-provider auth staleness to prevent cross-provider credential poisoning by @BYK in [#632](https://github.com/BYK/loreai/pull/632)
+- Pass session upstream URL to cache-warmer profile resolution by @BYK in [#626](https://github.com/BYK/loreai/pull/626)
+- Test cache isolation + docs accuracy for dynamic worker model by @BYK in [#624](https://github.com/BYK/loreai/pull/624)
+- Address PR #622 review — zero-cost models, dynamic discovery tests, stale docs by @BYK in [#623](https://github.com/BYK/loreai/pull/623)
+- Prevent cross-provider worker model pollution on multi-provider sessions by @BYK in [#621](https://github.com/BYK/loreai/pull/621)
+- Externalize @loreai/core in Bun ESM bundle to prevent fetch loop by @BYK in [#620](https://github.com/BYK/loreai/pull/620)
+- Use fossilize programmatic API instead of impl-* glob dance by @BYK in [#609](https://github.com/BYK/loreai/pull/609)
+- Remove cache fields from ZERO_USAGE and consolidate SSE extraction by @BYK in [#611](https://github.com/BYK/loreai/pull/611)
+- Polyfill getSystemErrorMap for Bun to prevent Sentry SDK crash by @BYK in [#602](https://github.com/BYK/loreai/pull/602)
+- Guard resp.usage accesses against undefined for vLLM/partial responses by @BYK in [#600](https://github.com/BYK/loreai/pull/600)
+- Handle SSE response from upstream when stream: false was sent by @BYK in [#605](https://github.com/BYK/loreai/pull/605)
+- Decouple worker wire protocol from provider identity by @BYK in [#596](https://github.com/BYK/loreai/pull/596)
+- Remove unused providerID param from resolveTarget by @BYK in [#593](https://github.com/BYK/loreai/pull/593)
+- Use fossilize programmatic API with dynamic import by @BYK in [#592](https://github.com/BYK/loreai/pull/592)
+- Use fossilize programmatic API with dynamic import resolution by @BYK in [06cc0b84](https://github.com/BYK/loreai/commit/06cc0b84602359c2e0bcce4d730c3f391bb84c80)
+- Enforce same-provider worker routing — never cross-provider by @BYK in [#588](https://github.com/BYK/loreai/pull/588)
+- Route NVIDIA and other OpenAI-protocol providers to OpenAI batch API by @BYK in [#587](https://github.com/BYK/loreai/pull/587)
+- Clear cached warmup body on provider/model switch by @BYK in [#585](https://github.com/BYK/loreai/pull/585)
+- Make passthrough and slash responses protocol-aware by @BYK in [#584](https://github.com/BYK/loreai/pull/584)
+- Remove protocolToProviderID and use exact provider ID matching for workers by @BYK in [#582](https://github.com/BYK/loreai/pull/582)
+- Make pipeline protocol-aware to prevent stream flag bugs by @BYK in [#581](https://github.com/BYK/loreai/pull/581)
+- Prevent session header leaks and harden fetch interceptor by @BYK in [#580](https://github.com/BYK/loreai/pull/580)
+- Per-provider auth and upstream snapshots to prevent cross-contamination by @BYK in [#579](https://github.com/BYK/loreai/pull/579)
+- Use original fetch for upstream calls to prevent interceptor loop by @BYK in [#576](https://github.com/BYK/loreai/pull/576)
+- Couple recall follow-up stream flag to its consumer by @BYK in [#573](https://github.com/BYK/loreai/pull/573)
+- Route worker calls through session's provider by @BYK in [#572](https://github.com/BYK/loreai/pull/572)
+- Provider routing follow-up fixes from post-merge audit by @BYK in [#565](https://github.com/BYK/loreai/pull/565)
+- Preserve 5m cache TTL for non-native Anthropic upstreams by @BYK in [#563](https://github.com/BYK/loreai/pull/563)
+- Strip extended cache TTL for non-native Anthropic upstreams by @BYK in [#560](https://github.com/BYK/loreai/pull/560)
+- Handle Codex /v1/responses/compact compaction endpoint by @BYK in [#552](https://github.com/BYK/loreai/pull/552)
+- Make worker model session-provider-aware to prevent cross-provider 401s by @BYK in [#554](https://github.com/BYK/loreai/pull/554)
+- Daily budget disable button + costs page performance by @BYK in [#553](https://github.com/BYK/loreai/pull/553)
+- Add auth stale guard to scheduleBackgroundWork and filter transient structured logs by @BYK in [#548](https://github.com/BYK/loreai/pull/548)
+- Lossless content-block passthrough for images and unknown media types by @BYK in [#526](https://github.com/BYK/loreai/pull/526)
+- Never merge unrelated sessions onto the gateway cwd by @BYK in [#523](https://github.com/BYK/loreai/pull/523)
+- Offer auto-import per-agent so new agents aren't skipped by @BYK in [#518](https://github.com/BYK/loreai/pull/518)
+- Make OpenAI Responses API stateless (drop previous_response_id) by @BYK in [#517](https://github.com/BYK/loreai/pull/517)
+- Reject WebSocket upgrades cleanly instead of 404 by @BYK in [#515](https://github.com/BYK/loreai/pull/515)
+- Coalesce tool items in OpenAI Responses API parser by @BYK in [#512](https://github.com/BYK/loreai/pull/512)
+- OpenAI tool pairing + recall leak on streaming path by @BYK in [#511](https://github.com/BYK/loreai/pull/511)
+
+#### Gateway,Core
+
+- Address 4 Sentry issues (1J, Q, 10, 1Z) by @BYK in [#614](https://github.com/BYK/loreai/pull/614)
+- Protocol-safe worker routing + atomic tool_use/tool_result on eviction by @BYK in [#594](https://github.com/BYK/loreai/pull/594)
+
+#### Site
+
+- Restore lilly stem clipped by viewBox by @BYK in [#629](https://github.com/BYK/loreai/pull/629)
+- Grain z-index, blog footer, CWD-relative fs read by @BYK in [#601](https://github.com/BYK/loreai/pull/601)
+- Convert embedded PNG logo to pure SVG, add light variant by @BYK in [#599](https://github.com/BYK/loreai/pull/599)
+
+#### Test
+
+- Make Sentry-off-during-tests CWD-independent (#530) by @BYK in [#541](https://github.com/BYK/loreai/pull/541)
+- Eliminate Sentry background-fetch interference in quota tests by @BYK in [#532](https://github.com/BYK/loreai/pull/532)
+- Scope quota fetch-mock capture to the quota URL (#527) by @BYK in [#529](https://github.com/BYK/loreai/pull/529)
+- Extend timeout for flaky quota test on CI by @BYK in [8e219898](https://github.com/BYK/loreai/commit/8e21989804575a39b81aa1fb34c7572b12af23fe)
+
+#### Other
+
+- (core,gateway) Restore bun export conditions for OpenCode plugin by @BYK in [#597](https://github.com/BYK/loreai/pull/597)
+- (cost) Apply batch discount to cache read/write costs by @BYK in [#503](https://github.com/BYK/loreai/pull/503)
+- (costs) Per-day cost ledger + faster Costs page by @BYK in [#507](https://github.com/BYK/loreai/pull/507)
+- (docs-preview) Deploy production docs to gh-pages root, not \_preview/ by @BYK in [9dd8cbe1](https://github.com/BYK/loreai/commit/9dd8cbe10f9b68b4becc00dbfd0ae99fbb8b122d)
+- (gateway,core,opencode) Auto-detect remote-gateway mode and harden project attribution by @BYK in [#618](https://github.com/BYK/loreai/pull/618)
+- (gateway,opencode) Transparent provider routing and protocol preservation by @BYK in [#571](https://github.com/BYK/loreai/pull/571)
+- (gateway,opencode,pi) Transparent provider routing via fetch-level interception by @BYK in [#574](https://github.com/BYK/loreai/pull/574)
+- (gradient) Detect free-write-cache providers and compress eagerly by @BYK in [#487](https://github.com/BYK/loreai/pull/487)
+- (install) Strip macOS quarantine flag and bump fossilize to 0.9.1 by @BYK in [#634](https://github.com/BYK/loreai/pull/634)
+- (lint) Resolve biome findings from PR #554 merge in [e7498302](https://github.com/BYK/loreai/commit/e7498302485efd062fde1535d7530b1401493457)
+- (opencode) Redirect all configured providers through gateway by @BYK in [#562](https://github.com/BYK/loreai/pull/562)
+- OAuth worker header simulation and proactive batch bypass by @BYK in [#502](https://github.com/BYK/loreai/pull/502)
+- OpenAI Responses API gateway translation (builds on #483) by @sergical in [#485](https://github.com/BYK/loreai/pull/485)
+- Wire ensureSelfEntity() into curator pipeline by @BYK in [#484](https://github.com/BYK/loreai/pull/484)
+- Extract evictIdleSessions() for testability, clean up consolidation cooldown by @BYK in [#481](https://github.com/BYK/loreai/pull/481)
+- Address review findings from PR #475 and #477 by @BYK in [#479](https://github.com/BYK/loreai/pull/479)
+- Filter embedding API key errors and harden beforeSend patterns by @BYK in [#477](https://github.com/BYK/loreai/pull/477)
+- Auto-disable batch API for providers that return 404 by @BYK in [#476](https://github.com/BYK/loreai/pull/476)
+- OpenAI protocol translation, curator validation, and batch queue 404 handling by @BYK in [#475](https://github.com/BYK/loreai/pull/475)
+- Batch consolidation for large entry counts by @BYK in [#474](https://github.com/BYK/loreai/pull/474)
+- Consolidation retry storm, idle curation frequency, and session memory leak by @BYK in [#473](https://github.com/BYK/loreai/pull/473)
+- Use tool_use/tool_result in recall follow-up to prevent result leaking by @BYK in [#472](https://github.com/BYK/loreai/pull/472)
+- Consolidate Sentry beforeSend filter for embedding and WASM errors by @BYK in [#466](https://github.com/BYK/loreai/pull/466)
+- Handle WASM abort in embedding worker and suppress shutdown noise by @BYK in [#464](https://github.com/BYK/loreai/pull/464)
+- Stop background worker 401 storm when OAuth token expires by @BYK in [#463](https://github.com/BYK/loreai/pull/463)
+
+### Documentation 📚
+
+#### Site
+
+- Fix 5 accuracy/sidebar issues from post-merge audit of #640 by @BYK in [#646](https://github.com/BYK/loreai/pull/646)
+- Add Setup command page + trim duplicated Codex sections by @BYK in [#640](https://github.com/BYK/loreai/pull/640)
+- Fix self-hosted terminology contradiction + deduplicate comparison by @BYK in [#547](https://github.com/BYK/loreai/pull/547)
+- Use 'fair source' terminology and add portability clarification by @BYK in [3f2c63e9](https://github.com/BYK/loreai/commit/3f2c63e915c5c8d649f0e9b24f40d316c0fbcc4d)
+- Add 'Why Lore' comparison page and extract shared theme by @BYK in [#542](https://github.com/BYK/loreai/pull/542)
+
+#### Other
+
+- (gateway) Clarify stateless Responses API comments (post-#517 review) by @BYK in [#519](https://github.com/BYK/loreai/pull/519)
+- Align site and README with pitch deck positioning by @BYK in [#615](https://github.com/BYK/loreai/pull/615)
+- Apply consistent shared-context positioning across site and README by @BYK in [#586](https://github.com/BYK/loreai/pull/586)
+- Add 'Your tools change. Your memory doesn't.' tagline by @BYK in [#500](https://github.com/BYK/loreai/pull/500)
+- Add RSI/harness self-improvement framing to marketing copy by @BYK in [#499](https://github.com/BYK/loreai/pull/499)
+
+### Internal Changes 🔧
+
+#### Gateway
+
+- Replace Bun runtime APIs with Node.js equivalents by @BYK in [#583](https://github.com/BYK/loreai/pull/583)
+- Replace 5 last* SessionState fields with UpstreamSnapshot by @BYK in [#575](https://github.com/BYK/loreai/pull/575)
+
+#### Other
+
+- (ci) Quiet test harness noise + pretest hook for bundle by @BYK in [#608](https://github.com/BYK/loreai/pull/608)
+- (core) Strengthen IDF cascade comparator tests by @BYK in [#642](https://github.com/BYK/loreai/pull/642)
+- (deps) Switch package manager from bun to pnpm by @BYK in [#578](https://github.com/BYK/loreai/pull/578)
+- (docs-preview) Add workflow_dispatch trigger for manual deploys by @BYK in [aa3d40cb](https://github.com/BYK/loreai/commit/aa3d40cb90a76abc5cc61c5cb0985968827e2d7b)
+- (publish) Pin Craft to 2.26.5 to fix silent publish failure by @BYK in [#653](https://github.com/BYK/loreai/pull/653)
+- (site) Consolidate logo & favicon assets, auto-generate at build time by @BYK in [#616](https://github.com/BYK/loreai/pull/616)
+- (test) Remove redundant typeof guard in quota URL capture by @BYK in [#534](https://github.com/BYK/loreai/pull/534)
+- (ui) Optimize dashboard/costs page queries and add response timeout by @BYK in [#561](https://github.com/BYK/loreai/pull/561)
+- Install rcodesign for macOS binary ad-hoc signing by @BYK in [#636](https://github.com/BYK/loreai/pull/636)
+- Rename nuum-dev references to lore-dev and modernize project naming by @BYK in [#619](https://github.com/BYK/loreai/pull/619)
+- Add actionlint to catch workflow YAML errors by @BYK in [#612](https://github.com/BYK/loreai/pull/612)
+- Remove @types/bun and add macOS binary quarantine strip by @BYK in [#591](https://github.com/BYK/loreai/pull/591)
+- Add docs preview workflow and skip CI for docs-only changes by @BYK in [#544](https://github.com/BYK/loreai/pull/544)
+- Block live models.dev fetch in test preload by @BYK in [#540](https://github.com/BYK/loreai/pull/540)
+- Stabilize distillation perf-regression guards (#538) by @BYK in [#539](https://github.com/BYK/loreai/pull/539)
+- Enable Biome lint rules and fix all findings by @BYK in [#537](https://github.com/BYK/loreai/pull/537)
+- Apply Biome safe lint autofixes by @BYK in [#535](https://github.com/BYK/loreai/pull/535)
+- Introduce Biome and apply repo-wide formatting by @BYK in [#533](https://github.com/BYK/loreai/pull/533)
+- Add coexistence test for per-agent auto-import + fix stale JSDoc by @BYK in [#520](https://github.com/BYK/loreai/pull/520)
+- OAuth worker header simulation tests and prompt-caching-scope beta by @BYK in [#504](https://github.com/BYK/loreai/pull/504)
+
+### Other
+
+- content(site): sharpen competitive positioning on Why Lore page by @BYK in [#631](https://github.com/BYK/loreai/pull/631)
+- Enlarge social icons in site nav by @sylncnr in [#556](https://github.com/BYK/loreai/pull/556)
+- Keep social icons visible in site nav by @sylncnr in [#555](https://github.com/BYK/loreai/pull/555)
+- Polish site logo and add separated logo assets by @sylncnr in [#549](https://github.com/BYK/loreai/pull/549)
+
 ## 0.24.1
 
 ### Bug Fixes 🐛
