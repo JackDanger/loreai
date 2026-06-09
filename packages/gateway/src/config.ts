@@ -110,6 +110,23 @@ export interface GatewayConfig {
    * address. Surfaced in the gateway boot log. Internal.
    */
   remoteGatewayCommandDefault?: boolean;
+  /**
+   * Extra HTTP headers to inject on every upstream call (corporate proxies,
+   * Cloudflare AI Gateway's `cf-aig-authorization`, LiteLLM team-routing
+   * tokens, audit/logging tracing headers, etc.).
+   *
+   * Parsed from the curl-style env var `LORE_UPSTREAM_EXTRA_HEADERS` — newline-
+   * separated `Name: Value` pairs, the same convention Anthropic's SDK uses
+   * for `ANTHROPIC_CUSTOM_HEADERS`. Keys are lowercased; values are
+   * whitespace-trimmed. Empty / malformed lines are skipped with a warning.
+   *
+   * Precedence (highest wins): gateway-managed headers (`x-api-key`,
+   * `Authorization`, `x-lore-*`) > these user-supplied extras > client
+   * forwarded headers. This means a user-supplied `Authorization: Bearer
+   * svc-token` overrides the session's credential — useful for routing
+   * worker calls or routing sessions to a service account.
+   */
+  upstreamExtraHeaders: Record<string, string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -120,7 +137,26 @@ export interface GatewayConfig {
 export function loadConfig(): GatewayConfig {
   const env = process.env;
   const hosts = parseHosts(env.LORE_LISTEN_HOST);
+  /**
+   * Explicitly marks this gateway as a remote / multi-tenant one.
+   * When set to `1`, the gateway assumes a per-user bucketing model
+   * — sessions are isolated by API key + project path instead of
+   * merging onto the gateway's cwd. This is the highest-priority
+   * signal in the 4-layer remote-gateway auto-detection: it
+   * overrides `LORE_HOSTED_MODE`, non-loopback bind detection, and
+   * the `lore start` default. Env: `LORE_REMOTE_GATEWAY=1`.
+   */
   const remoteGatewayEnv = isTruthy(env.LORE_REMOTE_GATEWAY);
+  /**
+   * Hosted / remote mode. When set to `1`, the gateway disables all
+   * filesystem operations that use client-controlled paths (`.lore.json`
+   * loading, `.lore.md` import/export, `getGitRemote()`) to prevent
+   * untrusted clients from influencing gateway behavior via crafted
+   * paths. Implies remote-gateway mode (per-session bucketing). Use
+   * this for multi-tenant hosted deployments where the gateway
+   * serves agents on other machines. CLI: `--local` / `-l` forces
+   * hosted mode OFF. Env: `LORE_HOSTED_MODE=1`.
+   */
   const hostedModeEnv = isTruthy(env.LORE_HOSTED_MODE);
   // Auto-detect when neither env var is DEFINED (not just truthy): a
   // non-loopback bind address strongly implies the gateway is serving remote
@@ -143,6 +179,13 @@ export function loadConfig(): GatewayConfig {
     upstreamOpenAI: trimTrailingSlash(
       env.LORE_UPSTREAM_OPENAI || "https://api.openai.com",
     ),
+    /**
+     * Idle timeout in seconds. After this many seconds with no active
+     * request, the gateway stops the per-session in-memory cache
+     * warmer and distillation loop to free resources. State is
+     * preserved in the DB so a new request resumes from where the
+     * session left off. Default: 60. Env: `LORE_IDLE_TIMEOUT`.
+     */
     idleTimeoutSeconds: parsePositiveInt(env.LORE_IDLE_TIMEOUT, 60),
     sessionEvictionTimeoutSeconds: parseNonNegativeInt(
       env.LORE_SESSION_EVICTION_TIMEOUT,
@@ -157,6 +200,7 @@ export function loadConfig(): GatewayConfig {
     workerUpstream: env.LORE_WORKER_UPSTREAM
       ? trimTrailingSlash(env.LORE_WORKER_UPSTREAM)
       : undefined,
+    upstreamExtraHeaders: parseCurlHeaders(env.LORE_UPSTREAM_EXTRA_HEADERS),
     // Hosted mode is always a remote gateway (no shared filesystem with clients).
     // Auto-detect from bind address when neither flag is explicitly set.
     remoteGateway: remoteGatewayEnv || hostedModeEnv || autoDetected,
@@ -701,4 +745,52 @@ export function hasNonLoopbackHost(hosts: string[]): boolean {
 
 function trimTrailingSlash(url: string): string {
   return url.replace(/\/+$/, "");
+}
+
+/**
+ * Parse curl-style multi-line header blocks into a `Record<string, string>`.
+ *
+ * Accepts the same format Anthropic's SDK uses for `ANTHROPIC_CUSTOM_HEADERS`
+ * and `OpenAI-Organization`-style env-var header lists: one `Name: Value`
+ * per line, separated by `\n`. Keys are lowercased and trimmed; values are
+ * trimmed. Empty lines and malformed lines (no colon) are skipped with a
+ * warning logged to stderr. Returns `{}` when the input is empty/undefined.
+ *
+ * Header names are validated to contain only printable ASCII (RFC 7230
+ * token chars) and a leading non-whitespace colon is required. Values may
+ * contain any printable ASCII excluding CR/LF (already split by the line
+ * separator). Sanitization strips control characters defensively to
+ * prevent header injection if a value happens to contain stray bytes.
+ */
+export function parseCurlHeaders(
+  input: string | undefined,
+): Record<string, string> {
+  if (!input) return {};
+  const out: Record<string, string> = {};
+  for (const rawLine of input.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const colonIdx = line.indexOf(":");
+    if (colonIdx <= 0) {
+      console.error(
+        `[lore] warning: ignoring malformed LORE_UPSTREAM_EXTRA_HEADERS line: ${JSON.stringify(line)}`,
+      );
+      continue;
+    }
+    const rawName = line.slice(0, colonIdx).trim();
+    const rawValue = line.slice(colonIdx + 1).trim();
+    // Header name: RFC 7230 token = visible ASCII + a few separators.
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: intentional control-character sanitization
+    const name = rawName.replace(/[\x00-\x1f\x7f]/g, "");
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: intentional control-character sanitization
+    const value = rawValue.replace(/[\x00-\x1f\x7f]/g, "").trim();
+    if (!name || !/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(name)) {
+      console.error(
+        `[lore] warning: ignoring invalid header name in LORE_UPSTREAM_EXTRA_HEADERS: ${JSON.stringify(rawName)}`,
+      );
+      continue;
+    }
+    out[name.toLowerCase()] = value;
+  }
+  return out;
 }

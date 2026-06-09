@@ -71,6 +71,7 @@ import type {
   UpstreamSnapshot,
 } from "./translate/types";
 import {
+  applyUpstreamExtraHeaders,
   blocksToText,
   extractJSONFromSSE,
   forwardClientHeaders,
@@ -1025,6 +1026,15 @@ function getLLMClient(config: GatewayConfig): LLMClient {
 
     // Wrap with batch queue for 50% cost savings on non-urgent worker calls.
     // Enabled by default — disable via LORE_BATCH_DISABLED=1.
+    /**
+     * Disables the batch-queue wrapper for non-urgent worker calls
+     * (distillation, curation, embedding). With batching on, the
+     * gateway groups these calls and submits them via the Anthropic
+     * Message Batches API for ~50% cost savings. Set
+     * `LORE_BATCH_DISABLED=1` to bypass batching and dispatch each
+     * call immediately (useful for low-latency debugging or when the
+     * upstream rejects batch submissions). Env: `LORE_BATCH_DISABLED=1`.
+     */
     const batchDisabled = process.env.LORE_BATCH_DISABLED === "1";
     if (Sentry.isInitialized()) {
       Sentry.setTag("batch_enabled", String(!batchDisabled));
@@ -1804,6 +1814,12 @@ async function forwardToUpstream(
     headers = result.headers;
     body = result.body;
   }
+
+  // Apply user-supplied LORE_UPSTREAM_EXTRA_HEADERS as the final overlay so
+  // corporate proxies, LiteLLM team-routing tokens, Cloudflare AI Gateway
+  // auth, and service-account scenarios can override any header — including
+  // the gateway-reconstructed `x-api-key` / `Authorization`.
+  applyUpstreamExtraHeaders(headers, config.upstreamExtraHeaders);
 
   let serializedBody = JSON.stringify(body);
 
@@ -2969,6 +2985,15 @@ function postResponse(
       model: req.model,
       headers: forwardClientHeaders(req.rawHeaders),
     };
+    // Apply LORE_UPSTREAM_EXTRA_HEADERS to the snapshot so cache-warming
+    // and other session-level follow-up requests inherit the user-supplied
+    // extra headers. (The per-request `forwardToUpstream` already overlays
+    // extras on the actual upstream call — this keeps the snapshot in sync
+    // for any consumer that reads it back.)
+    applyUpstreamExtraHeaders(
+      upstreamSnapshot.headers,
+      config.upstreamExtraHeaders,
+    );
     // Detect provider switch: if the model or provider changed, the cached
     // warmup body is stale (different model field at byte 10). Clear it to
     // avoid false cache-bust warnings ("early divergence at byte 10") and
@@ -3655,6 +3680,11 @@ async function passthroughResponsesCompact(
   // Forward OpenAI-specific headers
   const openAiBeta = rawHeaders["openai-beta"];
   if (openAiBeta) headers["openai-beta"] = openAiBeta;
+
+  // Apply user-supplied LORE_UPSTREAM_EXTRA_HEADERS as a final overlay so
+  // corporate proxies / LiteLLM team-routing tokens / Cloudflare AI Gateway
+  // / service-account scenarios work for compaction-passthrough calls too.
+  applyUpstreamExtraHeaders(headers, config.upstreamExtraHeaders);
 
   try {
     const upstream = await upstreamFetch(upstreamUrl, {
