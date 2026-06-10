@@ -1,4 +1,56 @@
 # Changelog
+## 0.26.0
+
+### New Features ✨
+
+#### Gateway
+
+- Offline compaction from distillations + SSE keepalive by @BYK in [#672](https://github.com/BYK/loreai/pull/672)
+- Auto-install @loreai/opencode plugin in `lore setup opencode` by @BYK in [#658](https://github.com/BYK/loreai/pull/658)
+
+#### Other
+
+- (ci) Build darwin binary natively on macOS for code cache + codesign by @BYK in [#641](https://github.com/BYK/loreai/pull/641)
+- (site) Add OG/Twitter Card meta tags + CI verification by @BYK in [#659](https://github.com/BYK/loreai/pull/659)
+
+### Bug Fixes 🐛
+
+#### Gateway
+
+- Error the compaction keepalive stream on summary failure by @BYK in [#675](https://github.com/BYK/loreai/pull/675)
+- Persist session project binding so restarts don't split sessions by @BYK in [#673](https://github.com/BYK/loreai/pull/673)
+- Make the LLM adapter the single owner of worker-failure attribution by @BYK in [#671](https://github.com/BYK/loreai/pull/671)
+- Circuit-break runaway worker failures + stable Sentry grouping by @BYK in [#669](https://github.com/BYK/loreai/pull/669)
+- Unify worker retry policy to ride out 429s and quiet noise by @BYK in [#666](https://github.com/BYK/loreai/pull/666)
+- Resolve bun export to source to prevent stale in-process bundle by @BYK in [#668](https://github.com/BYK/loreai/pull/668)
+- Harden request entrypoints against malformed input by @BYK in [#667](https://github.com/BYK/loreai/pull/667)
+- Address self-review findings in setup plugin install by @BYK in [#660](https://github.com/BYK/loreai/pull/660)
+
+#### Other
+
+- (ci) Include hidden files in sea-staging artifact upload by @BYK in [#657](https://github.com/BYK/loreai/pull/657)
+- (deps) Patch transitive yaml@2.7.1 (CVE-2026-33532) via pnpm override by @BYK in [#652](https://github.com/BYK/loreai/pull/652)
+- (test) Move vitest resolve.alias to top level so tests use source by @BYK in [#651](https://github.com/BYK/loreai/pull/651)
+- (website) Lead with install CTA, demote Folk Lore waitlist by @BYK in [#661](https://github.com/BYK/loreai/pull/661)
+
+### Documentation 📚
+
+- (setup) Add @loreai/opencode plugin install suggestion to setup opencode output by @BYK in [#656](https://github.com/BYK/loreai/pull/656)
+- (website) Lead with context management and add the cost story by @BYK in [#665](https://github.com/BYK/loreai/pull/665)
+- Update documentation for bun to node+pnpm+vitest migration by @BYK in [#674](https://github.com/BYK/loreai/pull/674)
+
+### Internal Changes 🔧
+
+#### Publish
+
+- Bump Craft to 2.26.9 and drop Node 22 workaround by @BYK in [61ea4bf6](https://github.com/BYK/loreai/commit/61ea4bf69ea4c6c8e74fe369cb49d248b5d1d4f8)
+- Use Node 22 + npm upgrade to avoid Node 24 extract-zip hang by @BYK in [c68bca8e](https://github.com/BYK/loreai/commit/c68bca8e264f50f27ad4744d877997bc5e1dba09)
+
+#### Other
+
+- Revert client-id back to app-id — different values, needs variable update by @BYK in [8a153b35](https://github.com/BYK/loreai/commit/8a153b354c1a34d48239c0f7e6cf8b0dec7f4952)
+- Replace deprecated app-id with client-id in GitHub App token action by @BYK in [ba983b60](https://github.com/BYK/loreai/commit/ba983b60fbe1070cdc40aaf9249653171d9e61f5)
+
 ## 0.25.0
 
 ### New Features ✨
