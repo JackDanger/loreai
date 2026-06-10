@@ -1,7 +1,9 @@
 import { describe, test, expect, beforeEach, vi } from "vitest";
+import * as Sentry from "@sentry/bun";
 import {
   recordWorkerFailure,
   recordWorkerSuccess,
+  allowWorkerProbe,
   getStatus,
   getDegradationWarning,
   getWorkerHealth,
@@ -13,6 +15,7 @@ import {
 vi.mock("@sentry/bun", () => ({
   captureMessage: vi.fn(),
   captureException: vi.fn(),
+  addBreadcrumb: vi.fn(),
 }));
 
 vi.mock("@loreai/core", () => ({
@@ -28,6 +31,7 @@ describe("worker-health", () => {
   beforeEach(() => {
     _resetForTest();
     _setNowForTest(() => 1_000_000);
+    vi.clearAllMocks();
   });
 
   describe("sliding window", () => {
@@ -157,6 +161,150 @@ describe("worker-health", () => {
       recordWorkerFailure("s1", "lore-distill", "no-auth");
       expect(getStatus("s2")).toBe("healthy");
       expect(getDegradationWarning("s2")).toBeNull();
+    });
+  });
+
+  // Regression: variable data (session ID, counts, durations) used to be
+  // embedded in the Sentry message/Error text, spawning a new issue per
+  // session — dozens of one-off LOREAI-GATEWAY worker-health issues. Stable
+  // message + fingerprint groups them into one issue per worker.
+  describe("Sentry grouping", () => {
+    test("degraded alert uses stable message + fingerprint, ids in tags", () => {
+      // 3 rapid failures in the window fire the degraded alert.
+      recordWorkerFailure("s1", "lore-distill", "no-response");
+      recordWorkerFailure("s1", "lore-distill", "no-response");
+      recordWorkerFailure("s1", "lore-distill", "no-response");
+
+      expect(Sentry.captureMessage).toHaveBeenCalledTimes(1);
+      const [msg, opts] = (Sentry.captureMessage as ReturnType<typeof vi.fn>)
+        .mock.calls[0];
+      expect(msg).toBe("Worker health degraded");
+      expect(opts.fingerprint).toEqual([
+        "worker-health-degraded",
+        "lore-distill",
+      ]);
+      // Variable data must live in tags, NOT the grouping message.
+      expect(opts.tags.session_id).toBe("s1");
+      expect(opts.tags.worker_id).toBe("lore-distill");
+    });
+
+    test("critical alert uses stable Error message + fingerprint", () => {
+      // Keep failures within the 5-min window (no reset) so firstFailureAt
+      // stays put while sustained duration crosses the 60-min threshold.
+      // 17 failures × 4 min = 68 min elapsed > 60-min CRITICAL_THRESHOLD_MS,
+      // so the captureException fires on the failure at the 60-min mark.
+      let t = 1_000_000;
+      for (let i = 0; i <= 16; i++) {
+        _setNowForTest(() => t);
+        recordWorkerFailure("s1", "lore-distill", "no-response");
+        t += 4 * 60 * 1000; // 4 min apart — inside the 5-min window
+      }
+
+      expect(Sentry.captureException).toHaveBeenCalled();
+      const [err, opts] = (Sentry.captureException as ReturnType<typeof vi.fn>)
+        .mock.calls[0];
+      expect((err as Error).message).toBe(
+        "Worker health critical: sustained worker failure",
+      );
+      expect(opts.fingerprint).toEqual([
+        "worker-health-critical",
+        "lore-distill",
+      ]);
+      expect(opts.tags.session_id).toBe("s1");
+    });
+
+    test("recovery is a breadcrumb, not a captured issue", () => {
+      // Drive to degraded so the recovery path is in alert state.
+      let t = 1_000_000;
+      for (let i = 0; i < 3; i++) {
+        _setNowForTest(() => t);
+        recordWorkerFailure("s1", "lore-distill", "no-response");
+        t += 5 * 60 * 1000;
+      }
+      _setNowForTest(() => 1_000_000 + 31 * 60 * 1000);
+      expect(getStatus("s1")).toBe("degraded");
+
+      recordWorkerSuccess("s1");
+      expect(Sentry.addBreadcrumb).toHaveBeenCalledTimes(1);
+      const [crumb] = (Sentry.addBreadcrumb as ReturnType<typeof vi.fn>).mock
+        .calls[0];
+      expect(crumb.message).toBe("Worker health recovered");
+    });
+  });
+
+  describe("circuit breaker (allowWorkerProbe)", () => {
+    test("healthy session is always allowed", () => {
+      expect(allowWorkerProbe("s1")).toBe(true);
+    });
+
+    test("recent failures keep the circuit closed (allowed)", () => {
+      recordWorkerFailure("s1", "lore-distill", "no-response");
+      recordWorkerFailure("s1", "lore-distill", "no-response");
+      expect(allowWorkerProbe("s1")).toBe(true);
+    });
+
+    test("sustained failure opens circuit and throttles to one probe per interval", () => {
+      const t0 = 1_000_000;
+      // First failure sets firstFailureAt.
+      _setNowForTest(() => t0);
+      recordWorkerFailure("s1", "lore-distill", "no-response");
+      // A failure 31 min later: window rotates, firstFailureAt preserved →
+      // sustained 31 min ≥ 30 min open threshold.
+      _setNowForTest(() => t0 + 31 * 60 * 1000);
+      recordWorkerFailure("s1", "lore-distill", "no-response");
+
+      // Just failed → within probe cooldown → blocked.
+      expect(allowWorkerProbe("s1")).toBe(false);
+
+      // 5 min after the last failure → one probe allowed.
+      _setNowForTest(() => t0 + 36 * 60 * 1000);
+      expect(allowWorkerProbe("s1")).toBe(true);
+
+      // A failed probe refreshes lastFailureAt → blocked again.
+      recordWorkerFailure("s1", "lore-distill", "no-response");
+      expect(allowWorkerProbe("s1")).toBe(false);
+    });
+
+    test("a successful worker call closes the circuit", () => {
+      const t0 = 1_000_000;
+      _setNowForTest(() => t0);
+      recordWorkerFailure("s1", "lore-distill", "no-response");
+      _setNowForTest(() => t0 + 31 * 60 * 1000);
+      recordWorkerFailure("s1", "lore-distill", "no-response");
+      expect(allowWorkerProbe("s1")).toBe(false);
+
+      recordWorkerSuccess("s1");
+      expect(allowWorkerProbe("s1")).toBe(true);
+    });
+
+    test("long gap since last failure allows a probe even while open", () => {
+      // After the circuit opens, a long stretch with no new failures means
+      // the next attempt is always allowed (probe interval long-since passed),
+      // so a recovered upstream is re-probed rather than starved forever.
+      const t0 = 1_000_000;
+      _setNowForTest(() => t0);
+      recordWorkerFailure("s1", "lore-distill", "no-response");
+      _setNowForTest(() => t0 + 31 * 60 * 1000);
+      recordWorkerFailure("s1", "lore-distill", "no-response");
+      expect(allowWorkerProbe("s1")).toBe(false); // just failed → cooldown
+
+      // 61 min after the last failure — well past the 5-min probe interval.
+      _setNowForTest(() => t0 + 31 * 60 * 1000 + 61 * 60 * 1000);
+      expect(allowWorkerProbe("s1")).toBe(true);
+    });
+
+    test("breaker is per-session, spanning workers (one circuit per session)", () => {
+      // Failures attributed to different workers in the same session share one
+      // circuit — when the upstream is down, distill failures gate curation too.
+      const t0 = 1_000_000;
+      _setNowForTest(() => t0);
+      recordWorkerFailure("s1", "lore-distill", "no-response");
+      _setNowForTest(() => t0 + 31 * 60 * 1000);
+      recordWorkerFailure("s1", "lore-curator", "no-response");
+      // Circuit is open for the whole session regardless of which worker asks.
+      expect(allowWorkerProbe("s1")).toBe(false);
+      // A different session is unaffected.
+      expect(allowWorkerProbe("s2")).toBe(true);
     });
   });
 });
