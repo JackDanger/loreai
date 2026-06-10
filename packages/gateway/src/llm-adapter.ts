@@ -640,22 +640,39 @@ export function createGatewayLLMClient(
                 // transport layer would clear failure state before the parse
                 // step can record "parse-error", making sustained parse
                 // failures invisible to the health ladder.
-                return parsed.text;
+                if (parsed.text) return parsed.text;
+
+                // Transport succeeded but the model returned no usable text.
+                // Record as no-response here so the adapter is the single
+                // owner of transport-failure attribution — core workers no
+                // longer record on a null return (which double-counted, e.g.
+                // a no-auth failure was logged by both the adapter AND the
+                // distiller). Sustained empty completions still escalate.
+                recordWorkerFailure(
+                  opts?.sessionID ?? "_unknown",
+                  opts?.workerID ?? "unknown",
+                  "no-response",
+                );
+                return null;
               }
 
               // --- Auth error: 401/403 — mark stale, re-resolve, retry once ---
               if (AUTH_ERROR_CODES.has(response.status)) {
                 const text = await response.text().catch(() => "(no body)");
 
+                // Always record the auth failure so the worker-health ladder
+                // sees it even for session-less paths (the adapter is the
+                // single owner of transport-failure attribution).
+                recordWorkerFailure(
+                  opts?.sessionID ?? "_unknown",
+                  opts?.workerID ?? "unknown",
+                  "auth-rejected",
+                );
                 // Mark this provider's credential stale so resolveAuth()
                 // falls through to global — but only for THIS provider,
-                // not other providers on the same session.
+                // not other providers on the same session. Requires a real
+                // session ID (staleness is per-session state).
                 if (opts?.sessionID) {
-                  recordWorkerFailure(
-                    opts.sessionID,
-                    opts?.workerID ?? "unknown",
-                    "auth-rejected",
-                  );
                   markAuthStale(opts.sessionID, model.providerID);
                 }
 
@@ -836,12 +853,25 @@ export function createGatewayLLMClient(
               }
               span.setAttribute("lore.retry.final_status", finalStatus);
               span.setStatus({ code: 2, message: `HTTP exhausted retries` });
+              recordWorkerFailure(
+                opts?.sessionID ?? "_unknown",
+                opts?.workerID ?? "unknown",
+                response.status === 429 ? "rate-limit" : "upstream-error",
+              );
               return null;
             }
           },
         );
       } catch (e) {
         log.error("worker prompt failed:", e);
+        // Network/timeout error — no response was received. Record here so the
+        // adapter remains the single owner of transport-failure attribution
+        // (core workers no longer record on a null return).
+        recordWorkerFailure(
+          opts?.sessionID ?? "_unknown",
+          opts?.workerID ?? "unknown",
+          "no-response",
+        );
         return null;
       } finally {
         activeWorkerCalls.delete(callID);
