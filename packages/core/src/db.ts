@@ -1028,6 +1028,7 @@ const MIGRATIONS: string[] = [
   ALTER TABLE session_state ADD COLUMN project_path TEXT;
   ALTER TABLE session_state ADD COLUMN project_path_provisional INTEGER NOT NULL DEFAULT 1;
   `,
+  `ALTER TABLE session_state ADD COLUMN compaction_anomaly_pending INTEGER NOT NULL DEFAULT 0;`,
 ];
 
 /**
@@ -1936,6 +1937,8 @@ export type SessionTrackingState = {
   // v36: project binding (survives restart so the project_id never splits)
   projectPath?: string | null;
   projectPathProvisional?: boolean;
+  // v37: compaction anomaly pending flag
+  compactionAnomalyPending?: boolean;
 };
 
 /**
@@ -2060,6 +2063,11 @@ export function saveSessionTracking(
     sets.push("project_path_provisional = ?");
     vals.push(state.projectPathProvisional ? 1 : 0);
   }
+  // v37: compaction anomaly pending flag (persisted across restarts)
+  if (state.compactionAnomalyPending !== undefined) {
+    sets.push("compaction_anomaly_pending = ?");
+    vals.push(state.compactionAnomalyPending ? 1 : 0);
+  }
 
   // Update only the specified columns
   db()
@@ -2098,6 +2106,8 @@ export type LoadedSessionTracking = {
   // v36: project binding
   projectPath: string | null;
   projectPathProvisional: boolean;
+  // v37: compaction anomaly pending flag
+  compactionAnomalyPending: boolean;
 };
 
 /**
@@ -2116,7 +2126,8 @@ export function loadSessionTracking(
               dynamic_context_cap, bust_rate_ema, inter_bust_interval_ema,
               last_layer, last_known_input, last_turn_at, last_bust_at,
               parent_session_id, is_subagent,
-              project_path, project_path_provisional
+              project_path, project_path_provisional,
+              compaction_anomaly_pending
        FROM session_state WHERE session_id = ?`,
     )
     .get(sessionID) as {
@@ -2144,6 +2155,7 @@ export function loadSessionTracking(
     is_subagent: number;
     project_path: string | null;
     project_path_provisional: number;
+    compaction_anomaly_pending: number;
   } | null;
   if (!row) return null;
   return {
@@ -2171,6 +2183,7 @@ export function loadSessionTracking(
     isSubagent: row.is_subagent === 1,
     projectPath: row.project_path,
     projectPathProvisional: row.project_path_provisional === 1,
+    compactionAnomalyPending: row.compaction_anomaly_pending === 1,
   };
 }
 
