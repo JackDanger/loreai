@@ -1,4 +1,30 @@
 # Changelog
+## 0.28.0
+
+### New Features ✨
+
+- (website) Clean extensionless URLs (drop .html) by @BYK in [#714](https://github.com/BYK/loreai/pull/714)
+- Surface known entities to the agent and resolve cross-project repos via recall by @BYK in [#707](https://github.com/BYK/loreai/pull/707)
+
+### Bug Fixes 🐛
+
+#### Gateway
+
+- Exit promptly on Ctrl+C (bounded shutdown + force-exit on repeat) by @BYK in [#706](https://github.com/BYK/loreai/pull/706)
+- Unblock background work — dynamic concurrency, idle de-flood, per-provider breaker, 402 handling by @BYK in [#713](https://github.com/BYK/loreai/pull/713)
+- Stop Tier 1b rotation from merging distinct Claude Code conversations by @BYK in [#712](https://github.com/BYK/loreai/pull/712)
+- Ignore NODE_OPTIONS in the SEA binary to keep the V8 code cache valid by @BYK in [#710](https://github.com/BYK/loreai/pull/710)
+- Replace Bun native fetch with node:https to bypass 5-min timeout cap by @BYK in [#704](https://github.com/BYK/loreai/pull/704)
+
+#### Other
+
+- (opencode) Pin Anthropic baseURL to /v1 to stop /messages 404 by @BYK in [#709](https://github.com/BYK/loreai/pull/709)
+
+### Internal Changes 🔧
+
+- (website) Split production deploy into its own workflow by @BYK in [#716](https://github.com/BYK/loreai/pull/716)
+- Strip unused Sentry integrations from bundle via pnpm patch by @BYK in [#708](https://github.com/BYK/loreai/pull/708)
+
 ## 0.27.0
 
 ### New Features ✨
