@@ -1,4 +1,58 @@
 # Changelog
+## 0.27.0
+
+### New Features ✨
+
+#### Gateway
+
+- Keepalive pings on client-facing SSE stream during upstream silence by @BYK in [#702](https://github.com/BYK/loreai/pull/702)
+- Synthetic tool primitive + auto-detect project via injected tool call by @BYK in [#681](https://github.com/BYK/loreai/pull/681)
+
+#### Other
+
+- (entities) Name-containment dedup signal (first-name vs full-name) by @BYK in [#692](https://github.com/BYK/loreai/pull/692)
+- (recall) Search people & entities (aliases + relationships) in recall by @BYK in [#688](https://github.com/BYK/loreai/pull/688)
+- (ui) Collapse entity-rebuild behind details + clickable knowledge type filters by @BYK in [#684](https://github.com/BYK/loreai/pull/684)
+- Session move/reassign — split mis-grouped projects by @BYK in [#696](https://github.com/BYK/loreai/pull/696)
+- Recognize X-Session-Id header for Tier-1 session identification by @BYK in [#687](https://github.com/BYK/loreai/pull/687)
+
+### Bug Fixes 🐛
+
+#### Gateway
+
+- Reuse existing gateway on EADDRINUSE instead of crashing by @BYK in [#698](https://github.com/BYK/loreai/pull/698)
+- Remove ineffective timeout:false, document Bun 5-min fetch cap by @BYK in [#700](https://github.com/BYK/loreai/pull/700)
+- Redirect root path instead of 500; backfill server + llm-adapter tests by @BYK in [#697](https://github.com/BYK/loreai/pull/697)
+- Prevent worker auth cross-contamination and improve resilience by @BYK in [#691](https://github.com/BYK/loreai/pull/691)
+- Use native fetch under Bun to fix streaming hang + 5-min timeout by @BYK in [#694](https://github.com/BYK/loreai/pull/694)
+- Remove 5-min upstream timeout that truncates slow LLM streams by @BYK in [#689](https://github.com/BYK/loreai/pull/689)
+- Update fossilize to 0.9.2 (fixes SEA code cache rejection) by @BYK in [#685](https://github.com/BYK/loreai/pull/685)
+- Replace DecompressionStream('zstd') with node:zlib streaming by @BYK in [#680](https://github.com/BYK/loreai/pull/680)
+
+#### Other
+
+- (entities,ui) Restore knowledge/entity dashboard views + harden self-merge + entity re-derivation by @BYK in [#682](https://github.com/BYK/loreai/pull/682)
+- Stop cross-project knowledge leakage and hide internal workers by @BYK in [#683](https://github.com/BYK/loreai/pull/683)
+- Distillation queue coalescing + log spam dedup + compaction anomaly handling by @BYK in [#676](https://github.com/BYK/loreai/pull/676)
+
+### Internal Changes 🔧
+
+#### Gateway
+
+- SSE-aware replay harness + streaming pipeline coverage by @BYK in [#701](https://github.com/BYK/loreai/pull/701)
+- Cover pipeline /lore:* slash commands and /v1/compact validation by @BYK in [#699](https://github.com/BYK/loreai/pull/699)
+- Cover recorder, cost-tracker, idle, anthropic stream by @BYK in [#693](https://github.com/BYK/loreai/pull/693)
+
+#### Publish
+
+- Use sudo for global npm upgrade (EACCES on /usr/local) by @BYK in [#679](https://github.com/BYK/loreai/pull/679)
+- Restore npm upgrade for OIDC trusted publishing by @BYK in [#678](https://github.com/BYK/loreai/pull/678)
+
+#### Other
+
+- (entities) Fix flaky containment survivor assertion (timestamp tiebreaker, not collation) by @BYK in [#695](https://github.com/BYK/loreai/pull/695)
+- Add Codecov coverage reporting with 80% patch requirement by @BYK in [#686](https://github.com/BYK/loreai/pull/686)
+
 ## 0.26.0
 
 ### New Features ✨
