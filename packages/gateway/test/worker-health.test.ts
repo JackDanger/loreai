@@ -10,6 +10,11 @@ import {
   markWorkerPaused,
   isWorkerCreditPaused,
   clearWorkerPaused,
+  markWorkerIncapable,
+  isWorkerIncapable,
+  isCapabilityEmpty,
+  recordEmptyWorkerResponse,
+  clearEmptyWorkerStreak,
   _resetForTest,
   _setNowForTest,
   type FailureReason,
@@ -387,6 +392,107 @@ describe("worker-health", () => {
       expect(allowWorkerProbe("s1")).toBe(true); // failure circuit untouched
       expect(Sentry.captureMessage).not.toHaveBeenCalled();
       expect(Sentry.captureException).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("worker-incapable verdict", () => {
+    test("mark + query a model as incapable", () => {
+      expect(isWorkerIncapable("opencode", "mimo-v2.5-free")).toBe(false);
+      markWorkerIncapable("opencode", "mimo-v2.5-free");
+      expect(isWorkerIncapable("opencode", "mimo-v2.5-free")).toBe(true);
+    });
+
+    test("verdict is scoped per provider+model", () => {
+      markWorkerIncapable("opencode", "mimo-v2.5-free");
+      expect(isWorkerIncapable("opencode", "mimo-v2.5-free")).toBe(true);
+      // Different model on same provider is unaffected.
+      expect(isWorkerIncapable("opencode", "deepseek-v4-flash-free")).toBe(
+        false,
+      );
+      // Same model name on a different provider is unaffected.
+      expect(isWorkerIncapable("anthropic", "mimo-v2.5-free")).toBe(false);
+    });
+
+    test("recording worker-incapable does NOT escalate the failure ladder", () => {
+      // Even many worker-incapable records must never open the failure circuit
+      // or trigger Sentry — it's a capability fact, not an outage.
+      for (let i = 0; i < 10; i++) {
+        recordWorkerFailure("s1", "lore-distill", "worker-incapable");
+      }
+      expect(getStatus("s1")).toBe("healthy");
+      expect(allowWorkerProbe("s1")).toBe(true);
+      expect(Sentry.captureMessage).not.toHaveBeenCalled();
+      expect(Sentry.captureException).not.toHaveBeenCalled();
+    });
+
+    test("_resetForTest clears incapable verdicts", () => {
+      markWorkerIncapable("opencode", "mimo-v2.5-free");
+      _resetForTest();
+      expect(isWorkerIncapable("opencode", "mimo-v2.5-free")).toBe(false);
+    });
+  });
+
+  describe("isCapabilityEmpty — finish-reason classification", () => {
+    test("capability signals: stop / end_turn", () => {
+      expect(isCapabilityEmpty("stop")).toBe(true);
+      expect(isCapabilityEmpty("end_turn")).toBe(true);
+    });
+
+    test("NOT capability: budget truncation (length AND max_tokens)", () => {
+      // length = OpenAI, max_tokens = Anthropic — both are budget truncations,
+      // not capability facts. The Anthropic spelling was the merge blocker.
+      expect(isCapabilityEmpty("length")).toBe(false);
+      expect(isCapabilityEmpty("max_tokens")).toBe(false);
+    });
+
+    test("NOT capability: content_filter and tool calls", () => {
+      expect(isCapabilityEmpty("content_filter")).toBe(false);
+      expect(isCapabilityEmpty("tool_calls")).toBe(false);
+      expect(isCapabilityEmpty("tool_use")).toBe(false);
+    });
+
+    test("NOT capability: unknown/undefined finish reason", () => {
+      expect(isCapabilityEmpty(undefined)).toBe(false);
+    });
+  });
+
+  describe("recordEmptyWorkerResponse — consecutive-empty threshold", () => {
+    test("does not mark incapable before 3 consecutive complete empties", () => {
+      expect(recordEmptyWorkerResponse("opencode", "m", "stop")).toBe(false);
+      expect(recordEmptyWorkerResponse("opencode", "m", "stop")).toBe(false);
+      expect(isWorkerIncapable("opencode", "m")).toBe(false);
+      // 3rd consecutive → marks.
+      expect(recordEmptyWorkerResponse("opencode", "m", "stop")).toBe(true);
+      expect(isWorkerIncapable("opencode", "m")).toBe(true);
+    });
+
+    test("a budget truncation does NOT count and resets the streak", () => {
+      recordEmptyWorkerResponse("opencode", "m", "stop");
+      recordEmptyWorkerResponse("opencode", "m", "stop");
+      // Anthropic truncation in the middle resets the streak — never marks.
+      expect(recordEmptyWorkerResponse("opencode", "m", "max_tokens")).toBe(
+        false,
+      );
+      expect(recordEmptyWorkerResponse("opencode", "m", "stop")).toBe(false);
+      expect(recordEmptyWorkerResponse("opencode", "m", "stop")).toBe(false);
+      expect(isWorkerIncapable("opencode", "m")).toBe(false);
+    });
+
+    test("clearEmptyWorkerStreak resets the counter", () => {
+      recordEmptyWorkerResponse("opencode", "m", "stop");
+      recordEmptyWorkerResponse("opencode", "m", "stop");
+      clearEmptyWorkerStreak("opencode", "m");
+      expect(recordEmptyWorkerResponse("opencode", "m", "stop")).toBe(false);
+      expect(isWorkerIncapable("opencode", "m")).toBe(false);
+    });
+
+    test("content_filter never marks a model incapable, no matter how many", () => {
+      for (let i = 0; i < 10; i++) {
+        expect(
+          recordEmptyWorkerResponse("opencode", "m", "content_filter"),
+        ).toBe(false);
+      }
+      expect(isWorkerIncapable("opencode", "m")).toBe(false);
     });
   });
 });
