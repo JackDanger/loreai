@@ -350,6 +350,57 @@ export function getModelEntrySync(modelID: string): ModelsDevEntry {
   return fallbackEntry(modelID);
 }
 
+/** True when models.dev data has been loaded into the in-memory cache. */
+export function isModelDataLoaded(): boolean {
+  return cachedModelData !== null;
+}
+
+/**
+ * After a failed/timed-out readiness wait, don't re-pay the wait again for this
+ * long. Without this, a sustained models.dev outage (cachedModelData stays
+ * null) would make EVERY conversation turn pay the full `timeoutMs` wait. The
+ * background fire-and-forget pre-warm and other call sites keep retrying; this
+ * just bounds the per-turn cost to one wait per cooldown.
+ */
+const READY_RETRY_COOLDOWN_MS = 30_000;
+let lastReadyAttemptAt = 0;
+
+/**
+ * Best-effort wait for models.dev data to be available before a synchronous
+ * getModelSpec/getModelEntrySync lookup. Returns immediately if data is already
+ * loaded; otherwise kicks off (or joins) the fetch and waits at most
+ * `timeoutMs`, then resolves regardless so the caller never hangs on a slow or
+ * unreachable models.dev. This closes the cold-start race where the FIRST
+ * request after a restart computes its budget from fallback pricing/limits
+ * (e.g. l0cap=80000 instead of the model's real cap) before the fire-and-forget
+ * pre-warm resolves. After the first success the 1h cache serves everyone.
+ *
+ * On a sustained outage `cachedModelData` stays null, so we only pay the wait
+ * once per READY_RETRY_COOLDOWN_MS — subsequent turns fall straight through to
+ * the synchronous fallback path instead of each blocking for `timeoutMs`.
+ */
+export async function ensureModelDataReady(timeoutMs = 2_000): Promise<void> {
+  if (cachedModelData !== null) return;
+  // Recently attempted and still not loaded — don't re-pay the wait every turn.
+  if (Date.now() - lastReadyAttemptAt < READY_RETRY_COOLDOWN_MS) return;
+  lastReadyAttemptAt = Date.now();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      fetchModelData(),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, timeoutMs);
+        // Don't let the timeout timer keep the event loop alive.
+        timer.unref?.();
+      }),
+    ]);
+  } catch {
+    // fetchModelData handles its own errors; never let this block the request.
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /** Clear cached data (for testing). */
 export function clearModelDataCache(): void {
   cachedModelData = null;
@@ -357,6 +408,7 @@ export function clearModelDataCache(): void {
   cachedProviderRoutes = null;
   cachedModelDataAt = 0;
   inflightFetch = null;
+  lastReadyAttemptAt = 0;
 }
 
 // ---------------------------------------------------------------------------
