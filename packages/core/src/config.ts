@@ -275,6 +275,20 @@ export const LoreConfig = z.object({
         .describe(
           "Run the curator on session idle (in addition to turn-based). Default: true.",
         ),
+      inFlight: z
+        .boolean()
+        .default(false)
+        .describe(
+          "Run the curator mid-conversation (turn-based), not just on idle. " +
+            "Default: false. WARNING: only enable on free-write / non-caching " +
+            "providers (e.g. MiniMax). On cache-sensitive providers (Anthropic), " +
+            "mid-session curation changes the knowledge base, which rewrites the " +
+            "context-bound LTM block (system[2]) and busts the prompt cache for " +
+            "the rest of a large conversation (a single change can re-write " +
+            "hundreds of thousands of cached tokens). Deferring curation to idle " +
+            "makes that rewrite free (the cache is cold then). Where cache writes " +
+            "are free this is harmless and yields fresher knowledge sooner.",
+        ),
       afterTurns: z
         .number()
         .min(1)
@@ -289,7 +303,13 @@ export const LoreConfig = z.object({
           "Max knowledge entries per project before consolidation. Default: 40.",
         ),
     })
-    .default({ enabled: true, onIdle: true, afterTurns: 3, maxEntries: 40 })
+    .default({
+      enabled: true,
+      onIdle: true,
+      inFlight: false,
+      afterTurns: 3,
+      maxEntries: 40,
+    })
     .describe("Curator scheduling and consolidation thresholds."),
   pruning: z
     .object({
