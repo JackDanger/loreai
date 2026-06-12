@@ -517,7 +517,27 @@ export type ForSessionOptions = {
    *  Mutually exclusive with `categories` — if both are provided,
    *  `categories` (include) wins. */
   excludeCategories?: (KnowledgeCategory | (string & {}))[];
+  /**
+   * IDs of entries that were selected on the PREVIOUS turn (the currently
+   * pinned system[2] set). These receive a relevance hysteresis bonus so they
+   * stay selected across turns unless a genuinely stronger entry displaces
+   * them or they are removed. Without this, vector scores re-computed against
+   * the evolving per-turn session context churn the budget-boundary subset
+   * every turn — each a real set change that busts the prompt cache. The bonus
+   * is multiplicative and modest, so a clearly more-relevant new entry still
+   * wins, but ties and minor fluctuations don't reshuffle the selected set.
+   */
+  stickyIds?: Set<string>;
 };
+
+/**
+ * Multiplicative relevance bonus applied to entries already selected on the
+ * previous turn (see ForSessionOptions.stickyIds). Tuned so a previously-shown
+ * entry keeps its slot against minor score fluctuations, but a new entry that
+ * scores >25% higher can still displace it — selection stays relevance-driven,
+ * just with anti-churn hysteresis.
+ */
+const STICKY_RELEVANCE_BONUS = 1.25;
 
 /**
  * Build a relevance-ranked, budget-capped list of knowledge entries for injection
@@ -613,11 +633,12 @@ export async function forSession(
     }
 
     const allPrefs = [...blanketPrefs, ...relevantForeign];
-    allPrefs.sort((a, b) =>
-      a.confidence !== b.confidence
-        ? b.confidence - a.confidence
-        : b.updated_at - a.updated_at,
-    );
+    allPrefs.sort((a, b) => {
+      if (a.confidence !== b.confidence) return b.confidence - a.confidence;
+      if (a.updated_at !== b.updated_at) return b.updated_at - a.updated_at;
+      // Deterministic id tiebreak — keeps preference ordering byte-stable.
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
 
     const HEADER_OVERHEAD_TOKENS = 15;
     let used = HEADER_OVERHEAD_TOKENS;
@@ -759,7 +780,25 @@ export async function forSession(
   // the structural "map" that makes specific gotchas/decisions interpretable
   // — without them, a gotcha about a subsystem is harder to contextualize.
   const allScored = [...scoredProject, ...scoredCross];
-  allScored.sort((a, b) => b.score - a.score);
+
+  // Set-stabilization hysteresis: boost entries that were selected last turn so
+  // the budget-boundary subset doesn't churn turn-to-turn (which would bust the
+  // system[2] prompt cache). Applied uniformly across all scoring paths. A new
+  // entry must out-score a sticky one by >(STICKY_RELEVANCE_BONUS-1) to displace
+  // it, so selection stays relevance-driven but resists minor fluctuations.
+  if (options?.stickyIds?.size) {
+    for (const s of allScored) {
+      if (options.stickyIds.has(s.entry.id)) s.score *= STICKY_RELEVANCE_BONUS;
+    }
+  }
+
+  // Deterministic ordering: sort by score DESC, then by entry id ASC as a
+  // stable tiebreak. Without the id tiebreak, equal/near-equal scores (or float
+  // micro-variations from re-embedding the evolving session context) reorder
+  // turn-to-turn, which churns the rendered system[2] text and busts the cache.
+  allScored.sort((a, b) =>
+    b.score !== a.score ? b.score - a.score : a.entry.id < b.entry.id ? -1 : 1,
+  );
 
   const HEADER_OVERHEAD_TOKENS = 15;
   const ARCH_BUDGET_FRACTION = 0.2;
@@ -772,8 +811,11 @@ export async function forSession(
   const archEntries = allScored.filter(
     (s) => s.entry.category === "architecture",
   );
-  // Sort architecture by score descending (already sorted, but filter may reorder)
-  archEntries.sort((a, b) => b.score - a.score);
+  // Sort architecture by score descending (already sorted, but filter may
+  // reorder) with the same id tiebreak for deterministic selection.
+  archEntries.sort((a, b) =>
+    b.score !== a.score ? b.score - a.score : a.entry.id < b.entry.id ? -1 : 1,
+  );
   for (const { entry } of archEntries) {
     if (used >= archBudget + HEADER_OVERHEAD_TOKENS) break;
     const cost = estimateTokens(entry.title + entry.content) + 10;

@@ -415,6 +415,58 @@ describe("ltm.forSession", () => {
     expect(found?.cross_project).toBe(0);
   });
 
+  test("deterministic ordering — equal-score entries keep a stable order (fix B)", async () => {
+    // Many entries with identical confidence and no distinguishing session
+    // context → equal/near-equal scores. Without the id tiebreak these reorder
+    // turn-to-turn and churn system[2]. With it, two calls produce identical
+    // ordering, so the rendered set is byte-stable.
+    for (let i = 0; i < 8; i++) {
+      ltm.create({
+        projectPath: PROJ,
+        category: "pattern",
+        title: `Equal pattern ${i}`,
+        content: "Neutral content with no session-context keywords.",
+        scope: "project",
+        crossProject: false,
+      });
+    }
+
+    const first = await ltm.forSession(PROJ, SESSION, 10_000);
+    const second = await ltm.forSession(PROJ, SESSION, 10_000);
+    expect(first.map((e) => e.id)).toEqual(second.map((e) => e.id));
+  });
+
+  test("stickyIds keeps previously-selected entries when budget is tight (fix: set-stabilization)", async () => {
+    // 10 equal-confidence entries (~50 tokens each) but a budget that fits ~4.
+    // Which 4 get selected is otherwise score-order-dependent; with stickyIds,
+    // the previously-selected set is retained across turns.
+    const ids: string[] = [];
+    for (let i = 0; i < 10; i++) {
+      ids.push(
+        ltm.create({
+          projectPath: PROJ,
+          category: "pattern",
+          title: `Tight pattern ${i}`,
+          content: "B ".repeat(150),
+          scope: "project",
+          crossProject: false,
+        }),
+      );
+    }
+
+    const TIGHT = 250;
+    const firstSel = await ltm.forSession(PROJ, SESSION, TIGHT);
+    const firstIds = new Set(firstSel.map((e) => e.id));
+    expect(firstIds.size).toBeGreaterThan(0);
+    expect(firstIds.size).toBeLessThan(10);
+
+    // Next turn, pass the prior selection as stickyIds → identical set retained.
+    const secondSel = await ltm.forSession(PROJ, SESSION, TIGHT, {
+      stickyIds: firstIds,
+    });
+    expect(new Set(secondSel.map((e) => e.id))).toEqual(firstIds);
+  });
+
   test("respects token budget — stops adding entries when budget exhausted", async () => {
     // Create many project entries
     for (let i = 0; i < 10; i++) {
