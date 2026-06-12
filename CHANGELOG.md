@@ -1,4 +1,26 @@
 # Changelog
+## 0.29.0
+
+### New Features ✨
+
+- (gateway) Route Pi openai-codex through the gateway (#715) by @BYK in [#717](https://github.com/BYK/loreai/pull/717)
+
+### Bug Fixes 🐛
+
+#### Core
+
+- Stop non-repo dirs from becoming git-remote magnets by @BYK in [#724](https://github.com/BYK/loreai/pull/724)
+- Self-heal corrupt/truncated embedding model download by @BYK in [#721](https://github.com/BYK/loreai/pull/721)
+
+#### Other
+
+- (cch) Run seed scripts under native Node, file issues on failure by @BYK in [#719](https://github.com/BYK/loreai/pull/719)
+- (gateway) Stop background-queue saturation (curation debounce + load-aware scaling) by @BYK in [#720](https://github.com/BYK/loreai/pull/720)
+
+### Internal Changes 🔧
+
+- (cch) Skip binary scan when a known seed validates; dedupe seed table by @BYK in [#722](https://github.com/BYK/loreai/pull/722)
+
 ## 0.28.0
 
 ### New Features ✨
