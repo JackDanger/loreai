@@ -57,6 +57,8 @@ import {
   embedding,
   saveSessionTracking,
   loadSessionTracking,
+  appendSessionPromptDelta,
+  listSessionPromptDeltas,
   loadHeaderSessionIndex,
   isHostedMode,
   enableHostedMode,
@@ -621,6 +623,235 @@ export function sameEntryKeys(
   return true;
 }
 
+const KNOWLEDGE_DELTA_TOKEN_BUDGET = 400;
+
+type MessageInsertSelector = {
+  target: "messages";
+  insertAt: number;
+};
+
+function parseMessageInsertSelector(raw: string): MessageInsertSelector | null {
+  try {
+    const parsed = JSON.parse(raw) as Partial<MessageInsertSelector>;
+    if (parsed.target !== "messages") return null;
+    const insertAt = parsed.insertAt;
+    if (!Number.isInteger(insertAt) || insertAt == null || insertAt < 0) {
+      return null;
+    }
+    return { target: "messages", insertAt };
+  } catch {
+    return null;
+  }
+}
+
+function parseDeltaMessage(raw: string): GatewayMessage | null {
+  try {
+    const parsed = JSON.parse(raw) as Partial<GatewayMessage>;
+    if (parsed.role !== "user" && parsed.role !== "assistant") return null;
+    if (!Array.isArray(parsed.content)) return null;
+    return parsed as GatewayMessage;
+  } catch {
+    return null;
+  }
+}
+
+function applySessionPromptDeltas(
+  messages: GatewayMessage[],
+  sessionID: string,
+): GatewayMessage[] {
+  const deltas = listSessionPromptDeltas(sessionID);
+  if (!deltas.length) return messages;
+
+  const out = messages.slice();
+  const parsed: Array<{
+    seq: number;
+    selector: MessageInsertSelector;
+    message: GatewayMessage;
+  }> = [];
+  for (const delta of deltas) {
+    const selector = parseMessageInsertSelector(delta.selector);
+    const message = parseDeltaMessage(delta.content);
+    if (!selector || !message) {
+      log.warn(
+        `prompt-delta: skipping corrupt delta seq=${delta.seq} session=${sessionID.slice(0, 16)}`,
+      );
+      continue;
+    }
+    parsed.push({ seq: delta.seq, selector, message });
+  }
+  parsed.sort((a, b) => {
+    const byPosition = b.selector.insertAt - a.selector.insertAt;
+    return byPosition !== 0 ? byPosition : b.seq - a.seq;
+  });
+
+  for (const { selector, message } of parsed) {
+    // Selector positions are defined against the transformed upstream message
+    // array at the time the delta is created. Re-inserting at the same index on
+    // subsequent turns preserves byte-identical prefixes across process restarts.
+    const insertAt = Math.min(selector.insertAt, out.length);
+    out.splice(insertAt, 0, message);
+  }
+  return out;
+}
+
+function ltmKeyMap(keys: string[] | undefined): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const key of keys ?? []) {
+    const idx = key.lastIndexOf(":");
+    out.set(idx === -1 ? key : key.slice(0, idx), key);
+  }
+  return out;
+}
+
+function changedLtmEntries(
+  entries: Array<{
+    id: string;
+    category: string;
+    title: string;
+    content: string;
+  }>,
+  previousKeys: string[] | undefined,
+  nextKeys: string[] | undefined,
+) {
+  const previous = ltmKeyMap(previousKeys);
+  const nextIDs = entryKeyIds(nextKeys);
+  return entries.filter((entry) => {
+    if (!nextIDs.has(entry.id)) return false;
+    const nextKey = `${entry.id}:${fnv1a(`${entry.title}\x1f${entry.content}`)}`;
+    return previous.get(entry.id) !== nextKey;
+  });
+}
+
+function removedLtmEntryIds(
+  previousKeys: string[] | undefined,
+  nextKeys: string[] | undefined,
+): string[] {
+  const nextIDs = entryKeyIds(nextKeys);
+  return Array.from(entryKeyIds(previousKeys)).filter((id) => !nextIDs.has(id));
+}
+
+function hasMaterialLtmDelta(input: {
+  entries: Array<{
+    id: string;
+    category: string;
+    title: string;
+    content: string;
+  }>;
+  previousKeys: string[] | undefined;
+  nextKeys: string[] | undefined;
+}): boolean {
+  return (
+    changedLtmEntries(input.entries, input.previousKeys, input.nextKeys)
+      .length > 0 ||
+    removedLtmEntryIds(input.previousKeys, input.nextKeys).length > 0
+  );
+}
+
+function buildKnowledgeDeltaMessage(
+  entries: Array<{
+    id: string;
+    category: string;
+    title: string;
+    content: string;
+  }>,
+  removedIds: string[],
+): GatewayMessage | null {
+  if (!entries.length && !removedIds.length) return null;
+  const renderedIds: string[] = [];
+  let rendered = formatKnowledge(
+    entries.map((entry) => ({
+      id: entry.id,
+      category: entry.category,
+      title: entry.title,
+      content: entry.content,
+    })),
+    KNOWLEDGE_DELTA_TOKEN_BUDGET,
+    renderedIds,
+  );
+  if (!rendered && entries.length) {
+    const entry = entries[0];
+    const truncated =
+      entry.content.length > 900
+        ? `${entry.content.slice(0, 900)}…`
+        : entry.content;
+    rendered =
+      `## Long-term Knowledge\n\n### ${entry.category.charAt(0).toUpperCase()}${entry.category.slice(1)}\n\n` +
+      `* **${entry.title}**: ${truncated}`;
+    renderedIds.push(entry.id);
+  }
+  rendered ??= "";
+  const renderedIDSet = new Set(renderedIds);
+  const skipped = entries.filter((entry) => !renderedIDSet.has(entry.id));
+  const skippedRendered = skipped.length
+    ? `\n\n## Additional Changed Knowledge (truncated)\n\n${skipped
+        .slice(0, 3)
+        .map((entry) => {
+          const truncated =
+            entry.content.length > 500
+              ? `${entry.content.slice(0, 500)}...`
+              : entry.content;
+          return `* **[${entry.id.slice(0, 8)}]${entry.title}**: ${truncated}`;
+        })
+        .join("\n")}${
+        skipped.length > 3
+          ? `\n* ${skipped.length - 3} more changed entr${skipped.length - 3 === 1 ? "y" : "ies"} omitted; older pinned system[2] entries for those IDs are stale.`
+          : ""
+      }`
+    : "";
+  const removals = removedIds.length
+    ? `\n\n## Superseded Long-term Knowledge\n\nIgnore any older pinned system[2] entries with these IDs; they are no longer in the current selected knowledge set:\n${removedIds.map((id) => `* [${id.slice(0, 8)}]`).join("\n")}`
+    : "";
+  return {
+    role: "user",
+    content: [
+      {
+        type: "text",
+        text:
+          "[Lore knowledge update: durable prompt delta. This message is inserted by Lore and replayed byte-identically on later turns until an intentional cache reset.]\n\n" +
+          rendered +
+          skippedRendered +
+          removals,
+      },
+    ],
+  };
+}
+
+function appendKnowledgePromptDelta(input: {
+  sessionID: string;
+  projectPath: string;
+  insertAt: number;
+  previousKeys: string[] | undefined;
+  nextKeys: string[] | undefined;
+  entries: Array<{
+    id: string;
+    category: string;
+    title: string;
+    content: string;
+  }>;
+}): boolean {
+  const entries = changedLtmEntries(
+    input.entries,
+    input.previousKeys,
+    input.nextKeys,
+  );
+  const message = buildKnowledgeDeltaMessage(
+    entries,
+    removedLtmEntryIds(input.previousKeys, input.nextKeys),
+  );
+  if (!message) return false;
+
+  appendSessionPromptDelta({
+    sessionID: input.sessionID,
+    projectID: ensureProject(input.projectPath),
+    selector: JSON.stringify({ target: "messages", insertAt: input.insertAt }),
+    content: JSON.stringify(message),
+  });
+  log.info(
+    `prompt-delta: appended knowledge update for session ${input.sessionID.slice(0, 16)} (${entries.length} entr${entries.length === 1 ? "y" : "ies"})`,
+  );
+  return true;
+}
+
 /**
  * Stable LTM (preference entries) + known entities per session — injected as
  * system[1] with a 1h cache breakpoint. Computed once per session and pinned
@@ -986,9 +1217,11 @@ async function initIfNeeded(
   } catch (e) {
     log.info("metric backfill failed:", e);
   }
-  embedding.runStartupBackfill().catch((e) => {
-    log.error("embedding backfill failed:", e);
-  });
+  if (process.env.NODE_ENV !== "test") {
+    embedding.runStartupBackfill().catch((e) => {
+      log.error("embedding backfill failed:", e);
+    });
+  }
 
   // Index lat.md/ directory sections (content-hash-based, skips unchanged files).
   try {
@@ -1768,7 +2001,16 @@ async function identifySession(
   const known = extractKnownSessionHeader(headers);
   if (known) {
     const indexKey = `${known.headerName}:${known.sessionId}`;
-    const existingSid = headerSessionIndex.get(indexKey);
+    let existingSid = headerSessionIndex.get(indexKey);
+    if (!existingSid) {
+      for (const entry of loadHeaderSessionIndex()) {
+        headerSessionIndex.set(
+          `${entry.headerName}:${entry.headerSessionId}`,
+          entry.sessionId,
+        );
+      }
+      existingSid = headerSessionIndex.get(indexKey);
+    }
     if (existingSid) {
       // Session may only exist in DB (after gateway restart) — that's fine,
       // getOrCreateSession() will hydrate it from the session_state table.
@@ -1863,6 +2105,10 @@ async function identifySession(
           );
           const sessionID = generateSessionID();
           headerSessionIndex.set(indexKey, sessionID);
+          saveSessionTracking(sessionID, {
+            headerSessionId: known.sessionId,
+            headerName: known.headerName,
+          });
           // The old predecessor's index entry is intentionally preserved — the
           // old session is still valid and may receive requests with its nanoid.
           // It will age out via ROTATION_MAX_AGE_MS naturally. If another new
@@ -1901,6 +2147,10 @@ async function identifySession(
     // Genuinely new session — no predecessor or ambiguous concurrent sessions.
     const sessionID = generateSessionID();
     headerSessionIndex.set(indexKey, sessionID);
+    saveSessionTracking(sessionID, {
+      headerSessionId: known.sessionId,
+      headerName: known.headerName,
+    });
     return { sessionID, isNew: true, tier: 1 };
   }
 
@@ -3681,7 +3931,12 @@ function scheduleBackgroundWork(
         if (!result) return; // skipped by circuit breaker
         sessionState.turnsSinceCuration = 0;
         saveSessionTracking(sessionID, { turnsSinceCuration: 0 });
-        if (result.created > 0 || result.updated > 0 || result.deleted > 0) {
+        if (
+          result.created > 0 ||
+          result.updated > 0 ||
+          result.deleted > 0 ||
+          result.changedEntries?.length > 0
+        ) {
           // Invalidate LTM cache only when curation actually changed entries
           ltmSessionCache.delete(sessionID);
           saveSessionTracking(sessionID, {
@@ -3765,6 +4020,7 @@ export async function generateCompactionSummary(opts: {
   const knowledge = entries.length
     ? formatKnowledge(
         entries.map((e) => ({
+          id: e.id,
           category: e.category,
           title: e.title,
           content: e.content,
@@ -4764,6 +5020,18 @@ async function handleConversationTurn(
   // system[2] and messages are re-processed; system[0]+[1] are cache reads.
   let stableLtmText: string | undefined; // block 2: preferences
   let ltmText: string | undefined; // block 3: context-bound entries
+  let pendingKnowledgeDelta:
+    | {
+        previousKeys: string[] | undefined;
+        nextKeys: string[] | undefined;
+        entries: Array<{
+          id: string;
+          category: string;
+          title: string;
+          content: string;
+        }>;
+      }
+    | undefined;
   if (cfg.knowledge.enabled) {
     // Track whether LTM state changed for batched DB persistence
     let ltmDirty = false;
@@ -4798,6 +5066,7 @@ async function handleConversationTurn(
         const prefText = prefEntries.length
           ? formatKnowledge(
               prefEntries.map((e) => ({
+                id: e.id,
                 category: e.category,
                 title: e.title,
                 content: e.content,
@@ -4854,6 +5123,14 @@ async function handleConversationTurn(
         // warm-cache path the text is unchanged, so byte equality with the pin
         // suffices and keys aren't needed.
         let cachedKeys: string[] | undefined;
+        let freshContextEntries:
+          | Array<{
+              id: string;
+              category: string;
+              title: string;
+              content: string;
+            }>
+          | undefined;
 
         if (!cached) {
           // Full context-bound budget — preferences have their own dedicated budget.
@@ -4876,14 +5153,15 @@ async function handleConversationTurn(
               ...(stickyIds.size ? { stickyIds } : {}),
             },
           );
+          freshContextEntries = contextEntries;
           if (contextEntries.length) {
             const renderedIds: string[] = [];
             const formatted = formatKnowledge(
               contextEntries.map((e) => ({
+                id: e.id,
                 category: e.category,
                 title: e.title,
                 content: e.content,
-                id: e.id,
               })),
               contextBudget,
               renderedIds,
@@ -4895,6 +5173,31 @@ async function handleConversationTurn(
               ltmSessionCache.set(sessionID, cached);
               ltmDirty = true;
             }
+          }
+
+          const pinned = ltmPinnedText.get(sessionID);
+          if (!cached && pinned) {
+            // The fresh selection is empty, but removing the pinned system[2]
+            // block would still bust the cached prefix. Preserve the exact
+            // bytes and append a durable removal delta instead.
+            pendingKnowledgeDelta = {
+              previousKeys: pinned.entryKeys,
+              nextKeys: [],
+              entries: [],
+            };
+            cached = {
+              formatted: pinned.formatted,
+              tokenCount: pinned.tokenCount,
+            };
+            cachedKeys = [];
+            ltmSessionCache.set(sessionID, cached);
+            ltmPinnedText.set(sessionID, {
+              formatted: pinned.formatted,
+              tokenCount: pinned.tokenCount,
+              entryKeys: [],
+            });
+            ltmDirty = true;
+            pinDirty = true;
           }
         }
 
@@ -4929,9 +5232,40 @@ async function handleConversationTurn(
               });
               ltmDirty = true;
             }
+          } else if (
+            pinned &&
+            cachedKeys &&
+            freshContextEntries &&
+            hasMaterialLtmDelta({
+              entries: freshContextEntries,
+              previousKeys: pinned.entryKeys,
+              nextKeys: cachedKeys,
+            })
+          ) {
+            // Material LTM changed mid-session. Do NOT rewrite system[2]: it is
+            // before the conversation cache breakpoint, so changing it would
+            // throw away the cached prefix. Keep the exact pinned bytes and
+            // append a durable prompt delta at the conversation tail instead.
+            pendingKnowledgeDelta = {
+              previousKeys: pinned.entryKeys,
+              nextKeys: cachedKeys,
+              entries: freshContextEntries,
+            };
+            ltmPinnedText.set(sessionID, {
+              formatted: pinned.formatted,
+              tokenCount: pinned.tokenCount,
+              entryKeys: cachedKeys,
+            });
+            ltmSessionCache.set(sessionID, {
+              formatted: pinned.formatted,
+              tokenCount: pinned.tokenCount,
+            });
+            ltmDirty = true;
+            pinDirty = true;
+            ltmText = pinned.formatted;
           } else {
-            // Set changed, content changed, or first injection — pin the new
-            // text along with its entry-key identity.
+            // First injection — pin the new text along with its entry-key
+            // identity. There is no earlier system[2] prefix to preserve yet.
             const newPin = { ...cached, entryKeys: cachedKeys };
             ltmPinnedText.set(sessionID, newPin);
             pinDirty = true;
@@ -5052,10 +5386,10 @@ async function handleConversationTurn(
         const renderedIds: string[] = [];
         const formatted = formatKnowledge(
           contextEntries.map((e) => ({
+            id: e.id,
             category: e.category,
             title: e.title,
             content: e.content,
-            id: e.id,
           })),
           contextBudget,
           renderedIds,
@@ -5083,8 +5417,44 @@ async function handleConversationTurn(
               ltmCacheTokens: tokenCount,
               // pin unchanged — don't write ltmPinText/ltmPinTokens/ltmPinKeys
             });
+          } else if (
+            pinned &&
+            hasMaterialLtmDelta({
+              entries: contextEntries,
+              previousKeys: pinned.entryKeys,
+              nextKeys: entryKeys,
+            })
+          ) {
+            // Material LTM changed during emergency refresh. Preserve the exact
+            // cached system[2] bytes and surface the change as a durable prompt
+            // delta instead of rewriting the pre-breakpoint system block.
+            pendingKnowledgeDelta = {
+              previousKeys: pinned.entryKeys,
+              nextKeys: entryKeys,
+              entries: contextEntries,
+            };
+            ltmPinnedText.set(sessionID, {
+              formatted: pinned.formatted,
+              tokenCount: pinned.tokenCount,
+              entryKeys,
+            });
+            ltmSessionCache.delete(sessionID);
+            ltmSessionCache.set(sessionID, {
+              formatted: pinned.formatted,
+              tokenCount: pinned.tokenCount,
+            });
+            ltmText = pinned.formatted;
+            setLtmTokens(stableTokens + pinned.tokenCount, sessionID);
+            saveSessionTracking(sessionID, {
+              ltmCacheText: pinned.formatted,
+              ltmCacheTokens: pinned.tokenCount,
+              ltmPinText: pinned.formatted,
+              ltmPinTokens: pinned.tokenCount,
+              ltmPinKeys: JSON.stringify(entryKeys),
+            });
           } else {
-            // Set changed or first Layer 4 turn — pin the new text + identity
+            // First Layer 4 injection — pin the new text + identity. There is no
+            // earlier system[2] prefix to preserve yet.
             ltmPinnedText.set(sessionID, { formatted, tokenCount, entryKeys });
             ltmText = formatted;
             setLtmTokens(stableTokens + tokenCount, sessionID);
@@ -5105,23 +5475,60 @@ async function handleConversationTurn(
       }
 
       if (!refreshed) {
-        // forSession() returned no context-bound entries — clear context LTM
-        // state. Stable LTM (system[1]) is preserved.
-        ltmSessionCache.delete(sessionID);
-        ltmPinnedText.delete(sessionID);
-        ltmText = undefined;
-        setLtmTokens(stableTokens, sessionID);
-        saveSessionTracking(sessionID, {
-          ltmCacheText: null,
-          ltmCacheTokens: null,
-          ltmPinText: null,
-          ltmPinTokens: null,
-          ltmPinKeys: null,
-        });
-        log.info(
-          "Context-bound LTM cleared on emergency layer (Layer 4) — stable LTM preserved for session",
-          sessionID,
-        );
+        const pinned = ltmPinnedText.get(sessionID);
+        if (pinned) {
+          // No fresh context-bound entries were selected, but removing an
+          // already-cached system[2] block would still bust the prefix. Keep the
+          // existing pin byte-for-byte and append a durable removal delta so the
+          // model knows the older pinned entries are superseded.
+          pendingKnowledgeDelta = {
+            previousKeys: pinned.entryKeys,
+            nextKeys: [],
+            entries: [],
+          };
+          ltmPinnedText.set(sessionID, {
+            formatted: pinned.formatted,
+            tokenCount: pinned.tokenCount,
+            entryKeys: [],
+          });
+          ltmSessionCache.delete(sessionID);
+          ltmSessionCache.set(sessionID, {
+            formatted: pinned.formatted,
+            tokenCount: pinned.tokenCount,
+          });
+          ltmText = pinned.formatted;
+          setLtmTokens(stableTokens + pinned.tokenCount, sessionID);
+          saveSessionTracking(sessionID, {
+            ltmCacheText: pinned.formatted,
+            ltmCacheTokens: pinned.tokenCount,
+            ltmPinText: pinned.formatted,
+            ltmPinTokens: pinned.tokenCount,
+            ltmPinKeys: JSON.stringify([]),
+          });
+          log.info(
+            "Context-bound LTM refresh returned no entries; preserving existing pinned system[2] for session",
+            sessionID,
+          );
+        } else {
+          // forSession() returned no context-bound entries and there is no prior
+          // pin to preserve — clear context LTM state. Stable LTM (system[1]) is
+          // preserved.
+          ltmSessionCache.delete(sessionID);
+          ltmPinnedText.delete(sessionID);
+          ltmText = undefined;
+          setLtmTokens(stableTokens, sessionID);
+          saveSessionTracking(sessionID, {
+            ltmCacheText: null,
+            ltmCacheTokens: null,
+            ltmPinText: null,
+            ltmPinTokens: null,
+            ltmPinKeys: null,
+          });
+          log.info(
+            "Context-bound LTM cleared on emergency layer (Layer 4) — stable LTM preserved for session",
+            sessionID,
+          );
+        }
       }
     } catch (e) {
       // On error, leave the step-6 LTM state intact (cache, pin, text)
@@ -5229,6 +5636,20 @@ async function handleConversationTurn(
       sessionState.syntheticResolveState = "done";
     }
   }
+
+  if (pendingKnowledgeDelta) {
+    const insertAt = Math.max(0, modifiedReq.messages.length - 1);
+    appendKnowledgePromptDelta({
+      sessionID,
+      projectPath,
+      insertAt,
+      ...pendingKnowledgeDelta,
+    });
+  }
+  modifiedReq.messages = applySessionPromptDeltas(
+    modifiedReq.messages,
+    sessionID,
+  );
 
   // --- 9. Forward to upstream ---
   // Enable prompt caching for conversation turns with layered breakpoints:

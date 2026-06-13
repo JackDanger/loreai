@@ -14,6 +14,7 @@ export * as ltm from "./ltm";
 export * as data from "./data";
 export * as distillation from "./distillation";
 export * as curator from "./curator";
+export type { ChangedEntry } from "./curator";
 export * as embedding from "./embedding";
 export * as embeddingVendor from "./embedding-vendor";
 export * as latReader from "./lat-reader";
@@ -87,10 +88,13 @@ export {
   type DailyCostBucket,
   saveSessionTracking,
   loadSessionTracking,
+  appendSessionPromptDelta,
+  listSessionPromptDeltas,
   loadHeaderSessionIndex,
   loadParentChildMap,
   type SessionTrackingState,
   type LoadedSessionTracking,
+  type SessionPromptDelta,
   getKV,
   setKV,
   getMeta,
@@ -144,6 +148,10 @@ export {
 } from "./gradient";
 export {
   formatKnowledge,
+  formatKnowledgeDelta,
+  shortId,
+  DELTA_MAX_ENTRIES,
+  DELTA_TOKEN_BUDGET,
   formatDistillations,
   DISTILLATION_SYSTEM,
   distillationUser,
@@ -157,6 +165,7 @@ export {
   COMPACT_SUMMARY_TEMPLATE,
   buildCompactPrompt,
 } from "./prompt";
+export type { DeltaOp, DeltaEntry } from "./prompt";
 export {
   shouldImport,
   importFromFile,

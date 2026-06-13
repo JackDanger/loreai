@@ -236,6 +236,56 @@ describe("buildAnthropicRequest — conversation caching", () => {
     });
   });
 
+  test("durable knowledge-delta message before the tail does not take the breakpoint", () => {
+    const req = makeRequest({
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "Implement feature" }],
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Implemented." }],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "[Lore knowledge update: durable prompt delta.]\n\nPrefer cache-stable deltas",
+            },
+          ],
+        },
+        {
+          role: "user",
+          content: [{ type: "text", text: "Continue with the current task." }],
+        },
+      ],
+    });
+
+    const body = getBody(req, { cacheConversation: true });
+    const messages = body.messages as Array<{
+      role: string;
+      content: Array<Record<string, unknown>>;
+    }>;
+
+    const priorUser = messages[0];
+    const priorAssistant = messages[1];
+    const delta = messages[2];
+    const currentUser = messages[3];
+    if (!priorUser || !priorAssistant || !delta || !currentUser) {
+      throw new Error("expected four messages");
+    }
+
+    expect(priorUser.content[0]?.cache_control).toBeUndefined();
+    expect(priorAssistant.content[0]?.cache_control).toBeUndefined();
+    expect(delta.role).toBe("user");
+    expect(delta.content[0]?.cache_control).toBeUndefined();
+    expect(currentUser.content[0]?.cache_control).toEqual({
+      type: "ephemeral",
+    });
+  });
+
   test("no-op when messages array is empty", () => {
     const req = makeRequest({ messages: [] });
     const body = getBody(req, { cacheConversation: true });

@@ -1084,6 +1084,23 @@ const MIGRATIONS: string[] = [
   -- busting the prompt cache once. NULL for pre-v41 rows / sessions.
   ALTER TABLE session_state ADD COLUMN dedup_decisions TEXT;
   `,
+  `
+  -- Version 42: Durable prompt deltas.
+  -- Prompt deltas are exact upstream-request insertions that must survive
+  -- process restarts and replay byte-identically at the same selector. They are
+  -- ordered per session by seq; rows are append-only until an intentional cache
+  -- reset/delete. The selector/content payloads are JSON owned by the gateway.
+  CREATE TABLE IF NOT EXISTS session_prompt_deltas (
+    session_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    project_id TEXT NOT NULL,
+    selector TEXT NOT NULL,
+    content TEXT NOT NULL,
+    PRIMARY KEY (session_id, seq)
+  );
+  CREATE INDEX IF NOT EXISTS idx_session_prompt_deltas_project
+    ON session_prompt_deltas (project_id);
+  `,
 ];
 
 /**
@@ -2199,7 +2216,6 @@ export function saveSessionTracking(
     sets.push("compaction_anomaly_pending = ?");
     vals.push(state.compactionAnomalyPending ? 1 : 0);
   }
-
   // Update only the specified columns
   db()
     .query(`UPDATE session_state SET ${sets.join(", ")} WHERE session_id = ?`)
@@ -2243,6 +2259,67 @@ export type LoadedSessionTracking = {
   // v37: compaction anomaly pending flag
   compactionAnomalyPending: boolean;
 };
+
+export type SessionPromptDelta = {
+  sessionID: string;
+  seq: number;
+  projectID: string;
+  selector: string;
+  content: string;
+};
+
+/**
+ * Append a durable prompt delta for a session. The next seq is allocated inside
+ * the INSERT statement so ordering is deterministic without a separate ID.
+ */
+export function appendSessionPromptDelta(input: {
+  sessionID: string;
+  projectID: string;
+  selector: string;
+  content: string;
+}): void {
+  db()
+    .query(
+      `INSERT INTO session_prompt_deltas (session_id, seq, project_id, selector, content)
+       SELECT ?, COALESCE(MAX(seq), -1) + 1, ?, ?, ?
+         FROM session_prompt_deltas
+        WHERE session_id = ?`,
+    )
+    .run(
+      input.sessionID,
+      input.projectID,
+      input.selector,
+      input.content,
+      input.sessionID,
+    );
+}
+
+export function listSessionPromptDeltas(
+  sessionID: string,
+): SessionPromptDelta[] {
+  const rows = db()
+    .query(
+      `SELECT session_id, seq, project_id, selector, content
+         FROM session_prompt_deltas
+        WHERE session_id = ?
+        ORDER BY seq`,
+    )
+    .all(sessionID) as Array<{
+    session_id: string;
+    seq: number;
+    project_id: string;
+    selector: string;
+    content: string;
+  }>;
+
+  return rows.map((row) => ({
+    sessionID: row.session_id,
+    seq: row.seq,
+    projectID: row.project_id,
+    selector: row.selector,
+    content: row.content,
+  }));
+}
 
 /**
  * Load persisted session tracking state. Returns null if no row exists.
@@ -2343,8 +2420,9 @@ export function loadHeaderSessionIndex(): Array<{
   const rows = db()
     .query(
       `SELECT session_id, header_session_id, header_name
-       FROM session_state
-       WHERE header_session_id IS NOT NULL AND header_name IS NOT NULL`,
+        FROM session_state
+        WHERE header_session_id IS NOT NULL AND header_name IS NOT NULL
+        ORDER BY updated_at ASC`,
     )
     .all() as Array<{
     session_id: string;
