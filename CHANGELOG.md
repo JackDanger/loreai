@@ -1,4 +1,59 @@
 # Changelog
+## 0.30.0
+
+### New Features ✨
+
+- (cch) Alert on duplicate billing-header sentinel (cache-bust early warning) by @BYK in [#745](https://github.com/BYK/loreai/pull/745)
+- (cli) Add `lore data export` to regenerate .lore.md from the DB by @BYK in [#730](https://github.com/BYK/loreai/pull/730)
+
+### Bug Fixes 🐛
+
+#### Cch
+
+- Handle 2.1.172+ hash preimage change (strip model + max_tokens) by @BYK in [#743](https://github.com/BYK/loreai/pull/743)
+- Anchor cch signing to billing header to stop self-referential cache busts by @BYK in [#739](https://github.com/BYK/loreai/pull/739)
+- Correct PRIME64_4 (Zig-std xxHash64), byte-safe capture, native scanner by @BYK in [#723](https://github.com/BYK/loreai/pull/723)
+
+#### Core
+
+- Freeze distilled prefix during warm sessions by @BYK in [#752](https://github.com/BYK/loreai/pull/752)
+- Stop pattern-echo/consolidation thrash (semantic dedup + maxEntries bump) by @BYK in [#737](https://github.com/BYK/loreai/pull/737)
+- Tombstone deleted knowledge to stop consolidation thrash by @BYK in [#729](https://github.com/BYK/loreai/pull/729)
+
+#### Gateway
+
+- Accurate divergence reason for turn-2 system[2] insertion by @BYK in [#756](https://github.com/BYK/loreai/pull/756)
+- Await models.dev data on first request (cold-start budget) by @BYK in [#754](https://github.com/BYK/loreai/pull/754)
+- Harden multi-model worker + budget paths by @BYK in [#753](https://github.com/BYK/loreai/pull/753)
+- Skip meta-distillation while cache is warm by @BYK in [#751](https://github.com/BYK/loreai/pull/751)
+- Stop context-health note from busting system[2] cache (#741) by @BYK in [#746](https://github.com/BYK/loreai/pull/746)
+- Stop mid-session curation cache busts; refresh stale prefs on cold idle by @BYK in [#738](https://github.com/BYK/loreai/pull/738)
+- Omit unsupported max_output_tokens for Codex by @BYK in [#735](https://github.com/BYK/loreai/pull/735)
+- Stop system[2] cache busts from LTM re-ranking by @BYK in [#727](https://github.com/BYK/loreai/pull/727)
+
+#### Other
+
+- (gradient) Stabilize tool-output dedup across turns (messages[N] cache bust) by @BYK in [#736](https://github.com/BYK/loreai/pull/736)
+- (opencode) Stop leaking helper exports that crash OpenCode v1.17.4 by @BYK in [#733](https://github.com/BYK/loreai/pull/733)
+- (recall) Prevent off-topic cross-session archives from derailing new sessions by @BYK in [#728](https://github.com/BYK/loreai/pull/728)
+- Intercept Codex /codex/responses and add body-shape protocol detection by @BYK in [#750](https://github.com/BYK/loreai/pull/750)
+
+### Documentation 📚
+
+- Reset .lore.md with latest state by @BYK in [4f4a567a](https://github.com/BYK/loreai/commit/4f4a567a1d0d1063a2db1b915a70c810b158b33f)
+
+### Internal Changes 🔧
+
+#### Gateway
+
+- Cover cache stability across compression layers by @BYK in [#748](https://github.com/BYK/loreai/pull/748)
+- E2e cache-stability guardrail by @BYK in [#742](https://github.com/BYK/loreai/pull/742)
+
+#### Other
+
+- (core) Regression for vector-scored system[2] set churn by @BYK in [#732](https://github.com/BYK/loreai/pull/732)
+- (deps-dev) Bump esbuild from 0.25.12 to 0.28.1 in the npm_and_yarn group across 1 directory by @dependabot in [#755](https://github.com/BYK/loreai/pull/755)
+
 ## 0.29.0
 
 ### New Features ✨
