@@ -14,6 +14,7 @@
  * the tail and these tests fail — turning whack-a-mole into a guardrail.
  */
 import { describe, it, expect, afterEach } from "vitest";
+import { log } from "@loreai/core";
 import type { Harness } from "./helpers/harness";
 import { createHarness } from "./helpers/harness";
 import {
@@ -1057,6 +1058,103 @@ describe("cache stability (e2e)", () => {
     } finally {
       if (prevIdleTimeout === undefined) delete process.env.LORE_IDLE_TIMEOUT;
       else process.env.LORE_IDLE_TIMEOUT = prevIdleTimeout;
+    }
+  });
+
+  // A full, signed billing-header sentinel — the exact shape BILLING_RESIGN_RE
+  // matches. Quoting this verbatim in conversation content (e.g. while editing
+  // cch.ts / cch.test.ts) is what an api-key user working on lore itself does.
+  const QUOTED_SENTINEL =
+    "x-anthropic-billing-header: cc_version=2.1.175.abc; cc_entrypoint=cli; cch=1a2b3;";
+
+  it("api-key session: quoted billing-header sentinel in content is NOT re-signed and stays byte-stable (#cch-resign-gate)", async () => {
+    // Regression: resignBody used to run on EVERY anthropic-protocol turn,
+    // gated only on protocol — not on the presence of a REAL billing header.
+    // For an api-key session whose CONTENT quotes the full sentinel, resignBody
+    // would content-match it, rewrite its cc_version/cch every turn (busting
+    // the prompt cache), and trip the verifyBillingHeaderUnique warning. The
+    // fix gates the call on hasBillingHeader(req.system) — the `^`-anchored real
+    // header — so a content copy never triggers re-signing.
+    //
+    // The harness sends via x-api-key (api-key auth) and never puts a real
+    // billing header at system[0], so the gate must be false here.
+    const warnings: string[] = [];
+    const captureSink = {
+      info: () => {},
+      warn: (msg: string) => warnings.push(msg),
+      error: () => {},
+      captureException: () => {},
+    };
+    const silentSink = {
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      captureException: () => {},
+    };
+    log.registerSink(captureSink);
+    try {
+      const turns = [
+        {
+          userMessage: `Help me edit this code: ${QUOTED_SENTINEL}`,
+          assistantText: "Sure, looking at it.",
+        },
+        {
+          userMessage: `And this test fixture too: ${QUOTED_SENTINEL}`,
+          assistantText: "Done.",
+        },
+        {
+          userMessage: `One more reference: ${QUOTED_SENTINEL}`,
+          assistantText: "Handled.",
+        },
+      ];
+      harness = await createHarness({
+        fixtures: makeConversationFixtures(turns),
+      });
+
+      const history: unknown[] = [];
+      for (const turn of turns) {
+        const resp = await harness.chat(makeBody(turn.userMessage, history));
+        expect(resp.status).toBe(200);
+        history.push({ role: "user", content: turn.userMessage });
+        history.push({
+          role: "assistant",
+          content: [{ type: "text", text: turn.assistantText }],
+        });
+      }
+
+      const bodies = harness.upstreamBodies();
+      expect(bodies.length).toBe(turns.length);
+
+      // Guard: the precondition actually holds — the quoted sentinel reached
+      // the upstream body verbatim (otherwise the test proves nothing).
+      expect(
+        bodies[0].includes("x-anthropic-billing-header:"),
+        "expected the quoted sentinel to be present in the upstream body",
+      ).toBe(true);
+
+      // The meaningful, non-vacuous signal: the verifyBillingHeaderUnique
+      // warning (the exact symptom seen in journalctl) must NOT fire. This runs
+      // inside resignBody on the serialized body, so it is observable here even
+      // though the replay interceptor captures the PRE-resign body object (and
+      // therefore can't directly witness the cch rewrite — see the cch.test.ts
+      // unit tests for the byte-level resign behaviour). Verified to FAIL on
+      // revert: without the gate the warning fires once per turn (4 markers).
+      expect(
+        warnings.filter((w) => w.includes("first-block invariant violated")),
+        "the billing-header invariant warning fired for an api-key session " +
+          "whose content merely quotes the sentinel",
+      ).toHaveLength(0);
+
+      // Sanity guard: the quoted sentinel reached the captured (pre-resign)
+      // body verbatim, confirming the precondition the warning check relies on.
+      for (let i = 0; i < bodies.length; i++) {
+        expect(
+          bodies[i].includes("cch=1a2b3;"),
+          `turn ${i + 1}: quoted sentinel missing from captured body`,
+        ).toBe(true);
+      }
+    } finally {
+      log.registerSink(silentSink);
     }
   });
 });
