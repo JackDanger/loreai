@@ -1,4 +1,37 @@
 # Changelog
+## 0.31.0
+
+### New Features ✨
+
+#### Cch
+
+- Add seeds for Claude Code up to 2.1.177 by @github-actions in [#761](https://github.com/BYK/loreai/pull/761)
+- Add seeds for Claude Code up to 2.1.176 by @github-actions in [#759](https://github.com/BYK/loreai/pull/759)
+
+#### Other
+
+- (auth) Folk Lore individual accounts via Supabase (Milestone 1, #467) by @BYK in [#765](https://github.com/BYK/loreai/pull/765)
+- (gateway) Persist durable prompt deltas by @BYK in [#747](https://github.com/BYK/loreai/pull/747)
+
+### Bug Fixes 🐛
+
+#### Gateway
+
+- Bundle ONNX WASM runtime so npm installs don't need onnxruntime-node (#763) by @BYK in [#769](https://github.com/BYK/loreai/pull/769)
+- Stop prompt deltas from splitting tool_use/tool_result pairs by @BYK in [#768](https://github.com/BYK/loreai/pull/768)
+- Make max_tokens sizing thinking-aware to prevent truncated turns by @BYK in [#767](https://github.com/BYK/loreai/pull/767)
+- Prefer authoritative inference over a stale X-Lore-Project header by @BYK in [#762](https://github.com/BYK/loreai/pull/762)
+
+#### Other
+
+- (ci) Build @loreai/core in CCH seed check workflow by @BYK in [#758](https://github.com/BYK/loreai/pull/758)
+- (cli,ui) Resilient dedup scan + knowledge merge UI by @BYK in [#760](https://github.com/BYK/loreai/pull/760)
+- (deps) Force esbuild >=0.28.1 to resolve Dependabot alerts by @BYK in [#764](https://github.com/BYK/loreai/pull/764)
+
+### Documentation 📚
+
+- Regenerate environment.md for LORE_NO_BROWSER by @BYK in [#766](https://github.com/BYK/loreai/pull/766)
+
 ## 0.30.0
 
 ### New Features ✨
