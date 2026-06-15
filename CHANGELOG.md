@@ -1,4 +1,24 @@
 # Changelog
+## 0.31.2
+
+### Bug Fixes 🐛
+
+#### Core
+
+- Stop LTM cache churn + close the cache-bust test blind spot by @BYK in [#778](https://github.com/BYK/loreai/pull/778)
+- Stop layer-1 raw-window pin from marching every turn by @BYK in [#773](https://github.com/BYK/loreai/pull/773)
+
+#### Gateway
+
+- Gate tool-call warmup continuation on confirmed hits (Bug C) by @BYK in [#780](https://github.com/BYK/loreai/pull/780)
+- Correct warmup hit accounting (phantom savings + ~10x undercount) by @BYK in [#779](https://github.com/BYK/loreai/pull/779)
+- Gate billing-header re-sign on real header presence by @BYK in [#775](https://github.com/BYK/loreai/pull/775)
+- Prevent cross-provider worker collusion + harden worker failure handling by @BYK in [#776](https://github.com/BYK/loreai/pull/776)
+
+### Internal Changes 🔧
+
+- (build) Run the build pipeline under Node (tsx), not Bun by @BYK in [#774](https://github.com/BYK/loreai/pull/774)
+
 ## 0.31.1
 
 ### Bug Fixes 🐛
