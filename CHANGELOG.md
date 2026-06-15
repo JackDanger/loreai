@@ -1,4 +1,10 @@
 # Changelog
+## 0.31.1
+
+### Bug Fixes 🐛
+
+- (core) Clamp tier-gate compressedEstimate to the layer-0 ceiling by @BYK in [#771](https://github.com/BYK/loreai/pull/771)
+
 ## 0.31.0
 
 ### New Features ✨
