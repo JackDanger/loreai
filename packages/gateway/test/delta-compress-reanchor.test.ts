@@ -35,6 +35,7 @@ import {
   applySessionPromptDeltas,
   removeOrphanedToolResults,
   shouldResetDeltaOnCompression,
+  reanchorExistingDelta,
 } from "../src/pipeline";
 import {
   appendSessionPromptDelta,
@@ -126,9 +127,28 @@ describe("shouldResetDeltaOnCompression — layer-transition predicate", () => {
     expect(shouldResetDeltaOnCompression(0, 1)).toBe(true);
   });
 
-  test("FALSE stable within layer 1 (1,1): caller handles raw-window repin separately", () => {
+  test("FALSE stable within layer 1 (1,1) on an ordinary turn", () => {
     expect(typeof shouldResetDeltaOnCompression).toBe("function");
     expect(shouldResetDeltaOnCompression(1, 1)).toBe(false);
+    expect(shouldResetDeltaOnCompression(1, 1, false)).toBe(false);
+  });
+
+  test("TRUE stable within layer 1 (1,1) when the turn came OUT OF IDLE", () => {
+    // A post-idle compact rebuilds the array while staying at layer 1 — a
+    // same-layer reshuffle the layer comparison misses. The idle flag must
+    // force a reset so the frozen absolute insertAt isn't replayed into the
+    // differently-shaped post-idle array (the steady-layer-1 cache-bust).
+    expect(shouldResetDeltaOnCompression(1, 1, true)).toBe(true);
+  });
+
+  test("FALSE out-of-idle at passthrough (0,0,true): nothing to reset when not compressed", () => {
+    // Layer 0 never carries a compression delta; an idle resume at layer 0 must
+    // not trigger a reset.
+    expect(shouldResetDeltaOnCompression(0, 0, true)).toBe(false);
+  });
+
+  test("TRUE out-of-idle at a higher compressed layer (2,2,true)", () => {
+    expect(shouldResetDeltaOnCompression(2, 2, true)).toBe(true);
   });
 
   test("TRUE escalated (1,2)", () => {
@@ -385,6 +405,120 @@ describe("layer-transition gates the delete/recompute of the persisted delta", (
     const sessionID = `delta-empty-${Date.now()}-${Math.random()}`;
     expect(listSessionPromptDeltas(sessionID).length).toBe(0);
     expect(() => deleteSessionPromptDelta(sessionID)).not.toThrow();
+    expect(listSessionPromptDeltas(sessionID).length).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 6. reanchorExistingDelta — the CALL-SITE action (not just the predicate)
+//
+// The bug that survived #786 was "predicate right, call-site untested": the
+// re-anchor on a steady-layer-1 post-idle reshuffle never ran because the
+// caller only consulted the layer-only predicate. These tests exercise the
+// actual re-anchor action — recomputing a fresh tool-pair-safe insertAt against
+// the CURRENT (post-reshuffle) array and persisting it with the SAME content —
+// which is what fires when shouldResetDeltaOnCompression(...,outOfIdle=true).
+// ---------------------------------------------------------------------------
+describe("reanchorExistingDelta — recomputes a persisted delta against the current array", () => {
+  test("is exported as a function", () => {
+    expect(typeof reanchorExistingDelta).toBe("function");
+  });
+
+  test("rewrites a stale frozen insertAt to a fresh near-tail index, preserving content", () => {
+    const sessionID = `reanchor-action-${Date.now()}-${Math.random()}`;
+    const projectPath = `/tmp/lore-reanchor-action-${Date.now()}`;
+    ensureProject(projectPath);
+
+    // Persist a delta whose frozen insertAt (99) is far past the end of the
+    // post-compact array — exactly the steady-layer-1 post-idle drift: the
+    // index was valid against the big pre-idle array, stale against this one.
+    const deltaContent = JSON.stringify({
+      role: "user",
+      content: [{ type: "text", text: "Lore knowledge update: pinned" }],
+    });
+    appendSessionPromptDelta({
+      sessionID,
+      projectID: ensureProject(projectPath),
+      selector: JSON.stringify({ target: "messages", insertAt: 99 }),
+      content: deltaContent,
+    });
+
+    // The post-compact array the caller passes (modifiedReq.messages).
+    const postCompact: GatewayMessage[] = [
+      user(text("distilled-prefix stand-in")),
+      assistant(text("a1")),
+      user(text("recent question")),
+      assistant(text("recent answer")),
+    ];
+
+    const reInsertAt = reanchorExistingDelta(
+      sessionID,
+      projectPath,
+      postCompact,
+    );
+
+    // Recomputed to a fresh near-tail, in-bounds index — NOT the stale 99.
+    expect(reInsertAt).not.toBeNull();
+    expect(reInsertAt).toBeLessThanOrEqual(postCompact.length);
+    expect(reInsertAt).not.toBe(99);
+
+    // Persisted row now carries the recomputed index and the SAME content.
+    const rows = listSessionPromptDeltas(sessionID);
+    expect(rows.length).toBe(1);
+    const selector = JSON.parse(rows[0].selector) as { insertAt: number };
+    expect(selector.insertAt).toBe(reInsertAt);
+    expect(rows[0].content).toBe(deltaContent);
+
+    // Replaying at the recomputed index lands the delta in-bounds, well-formed.
+    const out = applySessionPromptDeltas(postCompact.slice(), sessionID);
+    removeOrphanedToolResults(out);
+    expect(
+      out.some((m) =>
+        m.content.some(
+          (b) =>
+            b.type === "text" && b.text.startsWith("Lore knowledge update"),
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  test("re-anchored index never splits a tool_use/tool_result pair at the tail", () => {
+    const sessionID = `reanchor-toolpair-${Date.now()}-${Math.random()}`;
+    const projectPath = `/tmp/lore-reanchor-toolpair-${Date.now()}`;
+    ensureProject(projectPath);
+
+    appendSessionPromptDelta({
+      sessionID,
+      projectID: ensureProject(projectPath),
+      selector: JSON.stringify({ target: "messages", insertAt: 50 }),
+      content: JSON.stringify({
+        role: "user",
+        content: [{ type: "text", text: "Lore knowledge update" }],
+      }),
+    });
+
+    // Array ends with a tool pair — a naive tail index would split it.
+    const postCompact: GatewayMessage[] = [
+      user(text("hi")),
+      assistant(toolUse("X")),
+      user(toolResult("X")),
+    ];
+    reanchorExistingDelta(sessionID, projectPath, postCompact);
+
+    const out = applySessionPromptDeltas(postCompact.slice(), sessionID);
+    removeOrphanedToolResults(out);
+    assertNoOrphanedTools(out);
+  });
+
+  test("returns null and persists nothing when there is no existing delta", () => {
+    const sessionID = `reanchor-none-${Date.now()}-${Math.random()}`;
+    const projectPath = `/tmp/lore-reanchor-none-${Date.now()}`;
+    ensureProject(projectPath);
+
+    const result = reanchorExistingDelta(sessionID, projectPath, [
+      user(text("hi")),
+    ]);
+    expect(result).toBeNull();
     expect(listSessionPromptDeltas(sessionID).length).toBe(0);
   });
 });
