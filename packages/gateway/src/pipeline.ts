@@ -294,11 +294,24 @@ let initialized = false;
 // --- Context warning marker for unsustainable conversations ---
 // Injected into the response (assistant message) so the user can see it.
 // Stripped from incoming requests on subsequent turns to preserve cache prefix.
-const CONTEXT_WARNING_MARKER = "[lore:context-warning]";
-const CONTEXT_WARNING_TEXT =
-  `${CONTEXT_WARNING_MARKER} This conversation is growing unsustainably \u2014 ` +
-  `it has exceeded the context limit 5+ times in a row and compression cannot keep up. ` +
-  `Consider running /compact or starting a new conversation.\n\n---\n\n`;
+export const CONTEXT_WARNING_MARKER = "[lore:context-warning]";
+
+/**
+ * Build the unsustainable-conversation warning, reporting the ACTUAL number of
+ * consecutive cache busts rather than a hardcoded figure. `count` falls back to
+ * generic wording when unknown/zero.
+ *
+ * @internal Exported for tests.
+ */
+export function contextWarningText(count?: number): string {
+  const times =
+    count && count > 0 ? `${count} times in a row` : "several times in a row";
+  return (
+    `${CONTEXT_WARNING_MARKER} This conversation is growing unsustainably \u2014 ` +
+    `it has exceeded the context limit ${times} and compression cannot keep up. ` +
+    `Consider running /compact or starting a new conversation.\n\n---\n\n`
+  );
+}
 
 /**
  * Build the worker-degradation warning text (or null if the session's
@@ -322,7 +335,7 @@ function buildWorkerDegradationWarning(sessionID: string): string | null {
  */
 function injectContextWarning(
   resp: GatewayResponse,
-  text: string = CONTEXT_WARNING_TEXT,
+  text: string = contextWarningText(),
 ): GatewayResponse {
   // Insert after thinking blocks to preserve the expected block ordering
   // (thinking first, then text). Clients may inspect the first block's type
@@ -350,8 +363,10 @@ function injectContextWarning(
  * Only checks the first non-thinking content block of each assistant message —
  * that's where injectContextWarning() inserts it. This avoids false positives
  * if the model happens to echo the marker in its own output.
+ *
+ * @internal Exported for tests.
  */
-function stripContextWarnings(messages: GatewayMessage[]): void {
+export function stripContextWarnings(messages: GatewayMessage[]): void {
   for (const msg of messages) {
     if (msg.role !== "assistant") continue;
     // Find the first non-thinking block (mirrors injectContextWarning insertion point)
@@ -6004,9 +6019,10 @@ async function handleConversationTurn(
   //  2. No modification to user messages → no cache prefix divergence
   //  3. Stripped on the next turn to restore API-original content for cache
   const unsustainable = result.unsustainable;
+  const unsustainableBusts = result.consecutiveBusts;
   if (unsustainable) {
     log.warn(
-      `session ${sessionID}: unsustainable conversation detected (sustained consecutive cache busts). ` +
+      `session ${sessionID}: unsustainable conversation detected (${unsustainableBusts ?? "several"} consecutive cache busts). ` +
         `Warning will be prepended to response.`,
     );
   }
@@ -6027,7 +6043,7 @@ async function handleConversationTurn(
   }
   // A single combined flag/text drives all injection sites below.
   const warningText: string | undefined = unsustainable
-    ? CONTEXT_WARNING_TEXT
+    ? contextWarningText(unsustainableBusts)
     : (workerWarningText ?? undefined);
   const shouldInjectWarning = !!warningText;
 
