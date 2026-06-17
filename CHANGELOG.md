@@ -1,4 +1,31 @@
 # Changelog
+## 0.32.0
+
+### New Features ✨
+
+- (cch) Add seeds for Claude Code up to 2.1.178 by @github-actions in [#787](https://github.com/BYK/loreai/pull/787)
+
+### Bug Fixes 🐛
+
+#### Core
+
+- Pin compressed sessions to Layer >= 1 — no Layer-0 re-entry (prefix front-bust) by @BYK in [#798](https://github.com/BYK/loreai/pull/798)
+- Budget-aware distilled-prefix trim to stop spurious Layer 4 front-busts by @BYK in [#794](https://github.com/BYK/loreai/pull/794)
+- Gate unsustainable warning to genuinely over-cap sessions by @BYK in [#788](https://github.com/BYK/loreai/pull/788)
+- Stop curator from minting near-duplicate preferences by @BYK in [#783](https://github.com/BYK/loreai/pull/783)
+
+#### Gateway
+
+- Gate cache-warming on write-efficiency + quiet divergence log noise by @BYK in [#792](https://github.com/BYK/loreai/pull/792)
+- Normalize moving cache_control breakpoint in cache analytics by @BYK in [#789](https://github.com/BYK/loreai/pull/789)
+- Re-anchor durable delta on post-idle compact, not just layer change by @BYK in [#790](https://github.com/BYK/loreai/pull/790)
+- Re-anchor durable knowledge-delta on compression (stop tool-pair stripping) by @BYK in [#786](https://github.com/BYK/loreai/pull/786)
+- Stop background-worker 401s on non-Anthropic providers by @BYK in [#785](https://github.com/BYK/loreai/pull/785)
+
+#### Other
+
+- (deps) Bump @opentelemetry/core and protobufjs to patched versions by @BYK in [#793](https://github.com/BYK/loreai/pull/793)
+
 ## 0.31.2
 
 ### Bug Fixes 🐛
