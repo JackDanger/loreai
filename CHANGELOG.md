@@ -1,4 +1,47 @@
 # Changelog
+## 0.33.0
+
+### New Features ✨
+
+#### Cch
+
+- Add seed for Claude Code 2.1.181 and harden oracle capture by @BYK in [#805](https://github.com/BYK/loreai/pull/805)
+- Add seeds for Claude Code up to 2.1.179 by @github-actions in [#795](https://github.com/BYK/loreai/pull/795)
+
+#### Core
+
+- Knowledge confidence lifecycle — decay, reinforcement, value eviction by @BYK in [#816](https://github.com/BYK/loreai/pull/816)
+- Bound curator cost by token budget and prune dead knowledge by @BYK in [#815](https://github.com/BYK/loreai/pull/815)
+- Centralized DB query-tracing seam + upsert/transaction helpers by @BYK in [#802](https://github.com/BYK/loreai/pull/802)
+
+#### Other
+
+- (gateway) Measure system[0] cache-bust relocatability (#791) by @BYK in [#811](https://github.com/BYK/loreai/pull/811)
+- Basic-tier cloud sync engine (knowledge + entity graph) (#467) by @BYK in [#782](https://github.com/BYK/loreai/pull/782)
+
+### Bug Fixes 🐛
+
+#### Gateway
+
+- Stop consolidation retry storm across worktrees and concurrent sessions by @BYK in [#814](https://github.com/BYK/loreai/pull/814)
+- Reserve max_tokens headroom for thinking-by-default models by @BYK in [#812](https://github.com/BYK/loreai/pull/812)
+- Handle Claude Code billing headers without a cch segment by @BYK in [#809](https://github.com/BYK/loreai/pull/809)
+- Stop spurious prompt-cache busts and false unsustainable warnings by @BYK in [#808](https://github.com/BYK/loreai/pull/808)
+- Keep Claude Code 2.1.181+ emitting cch through the gateway by @BYK in [#806](https://github.com/BYK/loreai/pull/806)
+- Restart-proof session adoption to stop cold-start busts (#796) by @BYK in [#804](https://github.com/BYK/loreai/pull/804)
+
+#### Other
+
+- (core) Quote FTS5 query terms to prevent keyword-injection syntax errors by @BYK in [#810](https://github.com/BYK/loreai/pull/810)
+
+### Documentation 📚
+
+- (env) Document LORE_NO_DB_TRACING in generated env docs by @BYK in [#803](https://github.com/BYK/loreai/pull/803)
+
+### Internal Changes 🔧
+
+- (deps-dev) Bump astro from 6.4.4 to 6.4.6 in the npm_and_yarn group across 1 directory by @dependabot in [#800](https://github.com/BYK/loreai/pull/800)
+
 ## 0.32.0
 
 ### New Features ✨
