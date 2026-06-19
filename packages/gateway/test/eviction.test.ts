@@ -21,6 +21,7 @@ import {
   distillLimiter,
   curatorLimiter,
   loadSessionTracking,
+  ltm,
 } from "@loreai/core";
 import { startIdleScheduler, evictIdleSessions } from "../src/idle";
 import { loadConfig } from "../src/config";
@@ -558,6 +559,69 @@ describe("startIdleScheduler", () => {
       release();
       vi.useRealTimers();
       distillLimiter.clear();
+    }
+  });
+
+  test("runs the global dead-knowledge sweep on the first tick, with no active session", async () => {
+    vi.useFakeTimers();
+    try {
+      // A dead entry in a project with NO active session — the per-session pass
+      // would never reach it; only the global sweep does.
+      const id = ltm.create({
+        projectPath: "/test/idle/global-sweep",
+        category: "gotcha",
+        title: "Idle-project zombie",
+        content: "x",
+        scope: "project",
+      });
+      ltm.update(id, { confidence: 0 }); // below the relevance floor → dead
+      expect(ltm.get(id)).not.toBeNull();
+
+      const sessions = new Map<string, SessionState>();
+      const stop = startIdleScheduler(makeConfig(), sessions, async () => {});
+
+      // First scheduler tick fires the sweep even with an empty sessions map.
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(ltm.get(id)).toBeNull();
+
+      stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("the global sweep is interval-gated: a second tick within the hour does not re-run", async () => {
+    vi.useFakeTimers();
+    try {
+      const stop = startIdleScheduler(
+        makeConfig(),
+        new Map<string, SessionState>(),
+        async () => {},
+      );
+      // First tick runs the sweep and arms the 1h gate.
+      await vi.advanceTimersByTimeAsync(31_000);
+
+      // A new zombie appears AFTER the first sweep.
+      const id = ltm.create({
+        projectPath: "/test/idle/global-sweep-gate",
+        category: "gotcha",
+        title: "Late zombie",
+        content: "x",
+        scope: "project",
+      });
+      ltm.update(id, { confidence: 0 });
+
+      // Another tick within the interval must NOT sweep (gate still active).
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(ltm.get(id)).not.toBeNull();
+
+      // Once the interval elapses, the next tick reaps it.
+      await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+      expect(ltm.get(id)).toBeNull();
+
+      stop();
+    } finally {
+      vi.useRealTimers();
     }
   });
 });
