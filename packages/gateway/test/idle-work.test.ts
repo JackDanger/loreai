@@ -12,7 +12,13 @@ import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildIdleWorkHandler, touchSession } from "../src/idle";
+import {
+  buildIdleWorkHandler,
+  touchSession,
+  consolidationCooldownActive,
+  CONSOLIDATION_COOLDOWN_MS,
+  CONSOLIDATION_REATTEMPT_GROWTH,
+} from "../src/idle";
 import { recordConversationCost, clearAllCosts } from "../src/cost-tracker";
 import { resetPipelineState } from "../src/pipeline";
 import { ltm, loadSessionCosts } from "@loreai/core";
@@ -95,6 +101,78 @@ describe("touchSession", () => {
 });
 
 // ---------------------------------------------------------------------------
+// consolidationCooldownActive (pure decision — no LLM, no DB)
+// ---------------------------------------------------------------------------
+
+describe("consolidationCooldownActive", () => {
+  const now = 1_000_000_000_000;
+  const fresh = (
+    over: Partial<{
+      attemptedAt: number;
+      entryCount: number;
+      topCategoryCount: number;
+    }> = {},
+  ) => ({
+    attemptedAt: now,
+    entryCount: 50,
+    topCategoryCount: 14,
+    ...over,
+  });
+
+  test("no prior cooldown → not active (allowed to run)", () => {
+    expect(consolidationCooldownActive(undefined, now, 50, 14)).toBe(false);
+  });
+
+  test("within the window with flat counts → active (sticky skip)", () => {
+    const cd = fresh();
+    expect(consolidationCooldownActive(cd, now + 60_000, 50, 14)).toBe(true);
+  });
+
+  test("stays sticky when the entry count DECREASES (eviction/delete)", () => {
+    // A decrease yields no new merge candidate, so the prior "nothing to
+    // merge" verdict still holds — must not re-trigger.
+    const cd = fresh({ entryCount: 50 });
+    expect(consolidationCooldownActive(cd, now + 60_000, 49, 14)).toBe(true);
+  });
+
+  test("stays sticky on small growth (<= reattempt threshold)", () => {
+    const cd = fresh({ entryCount: 50 });
+    expect(
+      consolidationCooldownActive(
+        cd,
+        now + 60_000,
+        50 + CONSOLIDATION_REATTEMPT_GROWTH,
+        14,
+      ),
+    ).toBe(true);
+  });
+
+  test("re-attempts when the entry count GROWS past the threshold", () => {
+    const cd = fresh({ entryCount: 50 });
+    expect(
+      consolidationCooldownActive(
+        cd,
+        now + 60_000,
+        50 + CONSOLIDATION_REATTEMPT_GROWTH + 1,
+        14,
+      ),
+    ).toBe(false);
+  });
+
+  test("re-attempts when the top category grows", () => {
+    const cd = fresh({ topCategoryCount: 14 });
+    expect(consolidationCooldownActive(cd, now + 60_000, 50, 15)).toBe(false);
+  });
+
+  test("expires after the cooldown window elapses", () => {
+    const cd = fresh();
+    expect(
+      consolidationCooldownActive(cd, now + CONSOLIDATION_COOLDOWN_MS, 50, 14),
+    ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // buildIdleWorkHandler
 // ---------------------------------------------------------------------------
 
@@ -129,6 +207,88 @@ describe("buildIdleWorkHandler", () => {
     // Default config enables loreFile + agentsFile → writes AGENTS.md (+ .lore.md).
     const files = readdirSync(projectPath);
     expect(files.some((f) => f === "AGENTS.md" || f === ".lore.md")).toBe(true);
+  });
+
+  test("runs consolidation when a category is over threshold, then the cooldown skips the next tick", async () => {
+    const llm = makeLLM(); // prompt() returns null → consolidation is a no-op
+    const handler = buildIdleWorkHandler(llm);
+    const projectPath = makeProjectDir();
+    // Seed one category well past the per-category consolidation threshold so
+    // the consolidation block fires regardless of the threshold/cap values on
+    // whichever branch of the stack runs this (they grow up the stack). 75
+    // comfortably clears the largest per-category threshold in the stack.
+    for (let i = 0; i < 75; i++) {
+      ltm.create({
+        projectPath,
+        category: "preference",
+        title: `Pref ${i}`,
+        content: `Preference number ${i} content.`,
+        scope: "project",
+      });
+    }
+    const state = makeSessionState({
+      sessionID: "idle-consolidate",
+      projectPath,
+      turnsSinceCuration: 0, // keep curation from firing — isolate consolidation
+    });
+    const prompt = llm.prompt as ReturnType<typeof vi.fn>;
+
+    // First idle tick: over threshold → consolidation runs and calls the LLM.
+    // The no-op completion arms the cooldown.
+    await handler("idle-consolidate", state);
+    const callsAfterFirst = prompt.mock.calls.length;
+    expect(callsAfterFirst).toBeGreaterThan(0);
+
+    // Second idle tick: entry count unchanged → cooldown is active → the
+    // consolidation block is skipped, so the LLM is not called again.
+    await handler("idle-consolidate", state);
+    expect(prompt.mock.calls.length).toBe(callsAfterFirst);
+  });
+
+  test("consolidation that makes progress deletes the entry and clears the cooldown", async () => {
+    const projectPath = makeProjectDir();
+    // 74 full-confidence entries plus one low-confidence target (75 total, well
+    // past the largest per-category threshold in the stack). The target, being
+    // the lowest confidence, is always in the consolidation set on every branch
+    // — whether the global batched path (lowest-confidence tail) or the
+    // category-focused path (whole category) is taken.
+    for (let i = 0; i < 74; i++) {
+      ltm.create({
+        projectPath,
+        category: "preference",
+        title: `Keep ${i}`,
+        content: `Preference number ${i} content.`,
+        scope: "project",
+      });
+    }
+    const targetId = ltm.create({
+      projectPath,
+      category: "preference",
+      title: "Merge me",
+      content: "A near-duplicate preference the consolidator removes.",
+      scope: "project",
+      confidence: 0.3,
+    });
+    // LLM returns a consolidation delete op for the target → result.deleted > 0
+    // → the "made progress" branch (clears the cooldown).
+    const llm: LLMClient = {
+      prompt: vi.fn(async () =>
+        JSON.stringify({
+          ops: [{ op: "delete", id: targetId, reason: "dup" }],
+        }),
+      ),
+    };
+    const handler = buildIdleWorkHandler(llm);
+    const state = makeSessionState({
+      sessionID: "idle-consolidate-progress",
+      projectPath,
+      turnsSinceCuration: 0,
+    });
+
+    await handler("idle-consolidate-progress", state);
+
+    expect(llm.prompt).toHaveBeenCalled();
+    expect(ltm.get(targetId)).toBeNull(); // consolidation deleted it
   });
 
   test("persists the session cost snapshot when conversation cost exists", async () => {
