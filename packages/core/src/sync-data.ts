@@ -20,6 +20,7 @@ import {
   db,
   deleteTeamConfig,
   getTeamConfig,
+  setKV,
   setTeamConfig,
   withSyncApplying,
 } from "./db";
@@ -45,6 +46,15 @@ export interface SyncTableMeta {
    * is a PostgREST schema error (PGRST204). Defaults to true.
    */
   versioned?: boolean;
+  /**
+   * Pull-only: the remote row is server-authoritative and the client may only
+   * READ it (e.g. `profiles`, whose `tier` is billing-controlled via
+   * service_role). Pull-only tables get NO local change-capture trigger (see
+   * `installSyncCapture` in db.ts — its table list deliberately excludes them),
+   * are never enqueued in the outbox, and `pushOnce` skips them; `pullOnce`
+   * includes them. Defaults to false.
+   */
+  pullOnly?: boolean;
   /**
    * The data columns that exist on the REMOTE table (supabase/migrations/0002),
    * which is a curated subset of the local schema. Push/hash use ONLY these —
@@ -157,6 +167,27 @@ export const SYNCED_TABLES: Record<SyncTier, SyncTableMeta[]> = {
       versioned: false, // join table has no content_hash/revision columns
       syncColumns: ["knowledge_id", "entity_id"],
     },
+    {
+      // Pull-only mirror of the server-authoritative account row. The client
+      // reads its plan `tier` (and profile fields) but never writes them — the
+      // remote RLS is select/update-own and `tier` is service_role-locked
+      // (supabase/migrations/0004). No content_hash/revision remotely, so
+      // versioned:false (the pull path classifies by remote updated_at).
+      table: "profiles",
+      idColumns: ["id"],
+      ftsTables: [],
+      versioned: false,
+      pullOnly: true,
+      syncColumns: [
+        "id",
+        "tier",
+        "github_login",
+        "display_name",
+        "email",
+        "created_at",
+        "updated_at",
+      ],
+    },
   ],
   pro: [],
   max: [],
@@ -168,6 +199,43 @@ for (const t of SYNCED_TABLES.basic) META_BY_TABLE.set(t.table, t);
 /** The synced table set for a tier (only `basic` is populated today). */
 export function syncedTables(tier: SyncTier = "basic"): SyncTableMeta[] {
   return SYNCED_TABLES[tier];
+}
+
+/**
+ * The user's PLAN tier (billing-controlled: 'free' | 'pro' | …) read from the
+ * local pull-only `profiles` mirror. NOTE: this is distinct from `SyncTier`
+ * (basic/pro/max — which table SET to sync); a future mapping turns a plan tier
+ * into a SyncTier when Pro sync (issue #826/D) lands.
+ *
+ * Returns 'free' when no profile row has been pulled yet (unauthenticated or
+ * pre-first-sync). Billing flips `tier` server-side via service_role; it
+ * propagates here on the next pull (no bespoke "did I become pro?" path).
+ */
+export function currentTier(): string {
+  // INVARIANT: the mirror holds AT MOST the currently-authenticated user's row.
+  // `clearProfileMirror()` is called on logout and on account switch, so a stale
+  // OR foreign account's tier can never linger here — making this unqualified
+  // `LIMIT 1` deterministic and safe (RLS already guarantees a pull returns only
+  // the caller's own profile, so the network path never adds a second row).
+  const row = db().query("SELECT tier FROM profiles LIMIT 1").get() as
+    | { tier?: string }
+    | undefined;
+  return row?.tier ?? "free";
+}
+
+/**
+ * Drop the pulled `profiles` mirror (row + its sync_state + pull cursor). Called
+ * when the authenticated identity changes — logout or account switch — so the
+ * server-authoritative plan tier can never survive a sign-out or leak across
+ * accounts (see `currentTier`'s single-row invariant). The next sync re-pulls
+ * the current account's profile from scratch.
+ */
+export function clearProfileMirror(): void {
+  db().exec("DELETE FROM profiles");
+  db().query("DELETE FROM sync_state WHERE table_name = 'profiles'").run();
+  // Reset the pull cursor so the (new) account's profile is re-pulled from the
+  // start rather than skipped by a cursor inherited from the previous account.
+  setKV("sync.pull.profiles", "0|");
 }
 
 function meta(table: string): SyncTableMeta {
@@ -365,6 +433,10 @@ function rowIdExpr(m: SyncTableMeta): string {
 export function seedOutbox(tier: SyncTier = "basic"): void {
   const now = Date.now();
   for (const m of syncedTables(tier)) {
+    // Pull-only tables are never pushed — enqueuing them would create outbox
+    // entries that pushOnce skips forever, pinning their push cursor at 0 and
+    // (via the prune floor) permanently disabling outbox pruning for ALL tables.
+    if (m.pullOnly) continue;
     const idExpr = rowIdExpr(m);
     db()
       .query(
@@ -390,6 +462,9 @@ export function reconcile(tier: SyncTier = "basic"): void {
   const now = Date.now();
   seedOutbox(tier);
   for (const m of syncedTables(tier)) {
+    // Pull-only tables are never pushed (see seedOutbox) — also skip the
+    // delete-tombstone reconciliation so no `profiles` outbox entry is created.
+    if (m.pullOnly) continue;
     const idExpr = rowIdExpr(m);
     db()
       .query(

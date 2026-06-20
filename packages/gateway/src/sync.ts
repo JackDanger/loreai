@@ -72,15 +72,22 @@ function classifyPushError(
 export async function pushOnce(client: SupabaseClient): Promise<SyncResult> {
   const res: SyncResult = { pushed: 0, pulled: 0, conflicts: 0 };
   for (const meta of syncData.syncedTables("basic")) {
+    // Pull-only tables (e.g. profiles) are server-authoritative: the client only
+    // reads them. They have no outbox capture trigger, so this is belt-and-
+    // suspenders, but it keeps the intent explicit and avoids a needless scan.
+    if (meta.pullOnly) continue;
     await pushTable(client, meta.table, res);
   }
   // Reclaim outbox rows fully pushed across all tables THAT HAVE ENTRIES (seq <=
   // the lowest such cursor) — the outbox is otherwise append-only. A table with
   // no entries must NOT pin the floor at its cursor 0, which would block all
   // pruning forever (the common case: a project with knowledge but no relations).
+  // Pull-only tables are never pushed, so their cursor never advances past 0 —
+  // exclude them too (defense-in-depth: nothing should enqueue them, but if a
+  // stray entry existed it must not wedge the prune floor at 0).
   const cursors = syncData
     .syncedTables("basic")
-    .filter((m) => syncData.hasOutboxEntries(m.table))
+    .filter((m) => !m.pullOnly && syncData.hasOutboxEntries(m.table))
     .map((m) => Number(getKV(pushKey(m.table)) ?? "0"));
   if (cursors.length > 0) {
     const minCursor = Math.min(...cursors);
@@ -406,9 +413,17 @@ function applyRemote(
     rowId,
     pushCursor,
   );
-  const cls = syncData.classifyRemoteRow(meta.table, rowId, remoteHash, {
-    pendingLocalChange,
-  });
+  // Pull-only tables are server-authoritative — the client never writes them, so
+  // local divergence (a "conflict") is impossible by construction. classifyRemoteRow
+  // would otherwise flag every change as a conflict: these tables carry no remote
+  // content_hash (remoteHash === null), so its identical-content "skip" can never
+  // fire and a re-pulled row (e.g. a billing-driven tier flip) would look diverged.
+  // Always take the remote. The pull cursor already skips unchanged rows.
+  const cls: syncData.RemoteClass = meta.pullOnly
+    ? "apply"
+    : syncData.classifyRemoteRow(meta.table, rowId, remoteHash, {
+        pendingLocalChange,
+      });
 
   if (cls === "skip") return;
   if (cls === "conflict") {
