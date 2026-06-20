@@ -1272,12 +1272,14 @@ const MIGRATIONS: string[] = [
   -- 🔴 PARTIAL-MIRROR CONTRACT: from here on knowledge_fts is a PARTIAL mirror of
   -- knowledge (only current+live rows), NOT a full mirror. Harmless in THIS PR —
   -- appendVersion() has no production caller, so every row is v1/current/live and
-  -- the mirror is still total. But once the follow-up PR wires update()/remove()
-  -- onto appendVersion(), COUNT(knowledge) > COUNT(knowledge_fts), which breaks
-  -- three full-mirror assumptions that MUST be fixed in that same PR:
-  --   1. validateDatabaseIntegrity() (data.ts) asserts the two counts are equal —
-  --      relax to COUNT(knowledge_fts) == COUNT(knowledge WHERE is_current=1 AND
-  --      is_deleted=0), else the data CLI aborts on every run.
+  -- the mirror is still total. Once the follow-up PR wires update()/remove() onto
+  -- appendVersion(), the index holds only current+live rows. Two assumptions need
+  -- fixing (done in sub-PR 2b-2a):
+  --   1. [RESOLVED — was a FALSE ALARM] validateDatabaseIntegrity() (data.ts) does
+  --      NOT break: knowledge_fts is external-content, so COUNT(*) FROM knowledge_fts
+  --      scans the CONTENT table (= COUNT(knowledge)), not the index — the parity
+  --      stays equal under versioning. Left unchanged; a real partial-index check
+  --      would use FTS5 'integrity-check'.
   --   2. rebuildFts("knowledge_fts") (sync-data.ts, run after every knowledge sync
   --      pull) uses FTS5 'rebuild', which ignores these triggers and re-indexes
   --      ALL versions — resurfacing superseded/deleted rows in search. Make the
@@ -1306,6 +1308,35 @@ const MIGRATIONS: string[] = [
     SELECT new.rowid, new.title, new.content, new.category
      WHERE new.is_current = 1 AND new.is_deleted = 0;
   END;
+  `,
+  `
+  -- Version 51: append-only invariants + query-plan index (A2 sub-PR 2b-2a, #823).
+  --
+  -- idx_knowledge_one_current enforces AT MOST ONE current version per logical_id
+  -- at the schema level — the core append-only invariant appendVersion() upholds
+  -- (it demotes the old current row before inserting the new one). Satisfiable on
+  -- existing data: every row is is_current=1 with a unique logical_id (== id).
+  --
+  -- idx_knowledge_project_current restores the project-scoped query plan once reads
+  -- route through knowledge_current: without it a no-stats DB picks the
+  -- non-selective idx_knowledge_current(is_current) over idx_knowledge_project
+  -- (2a review query-plan nit).
+  --
+  -- Defensive dedup FIRST: if a pre-v51 DB somehow has >1 current version for a
+  -- logical_id (only producible by a crash in an older non-atomic appendVersion —
+  -- which never had a production caller), demote all but the highest version so the
+  -- UNIQUE index below cannot fail and boot-loop the migration. Pure insurance.
+  UPDATE knowledge SET is_current = 0
+   WHERE is_current = 1 AND EXISTS (
+     SELECT 1 FROM knowledge k2
+      WHERE k2.logical_id = knowledge.logical_id AND k2.is_current = 1
+        AND (k2.version > knowledge.version
+             OR (k2.version = knowledge.version AND k2.rowid > knowledge.rowid))
+   );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_one_current
+    ON knowledge(logical_id) WHERE is_current = 1;
+  CREATE INDEX IF NOT EXISTS idx_knowledge_project_current
+    ON knowledge(project_id) WHERE is_current = 1 AND is_deleted = 0;
   `,
 ];
 
@@ -1772,6 +1803,10 @@ function recoverMissingObjects(database: Database) {
   database.exec(`
     CREATE INDEX IF NOT EXISTS idx_knowledge_logical ON knowledge(logical_id, version);
     CREATE INDEX IF NOT EXISTS idx_knowledge_current ON knowledge(is_current);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_one_current
+      ON knowledge(logical_id) WHERE is_current = 1;
+    CREATE INDEX IF NOT EXISTS idx_knowledge_project_current
+      ON knowledge(project_id) WHERE is_current = 1 AND is_deleted = 0;
     CREATE VIEW IF NOT EXISTS knowledge_current AS
       SELECT k.* FROM knowledge k WHERE k.is_current = 1 AND k.is_deleted = 0;
   `);
