@@ -359,4 +359,114 @@ describe("transform writes the size snapshot end-to-end", () => {
       evictSession(session);
     }
   });
+
+  // #886: the evaluator must be unbiased — it treats cacheSizeFull and
+  // cacheSizeCompressed as the same INPUT scale (both carry the non-message
+  // floor and the same UNCALIBRATED_SAFETY factor). A body-only compressed
+  // (old behavior) would understate coolBustCost, biasing toward compaction.
+  describe("evaluateCacheStrategy — scale consistency (issue #886)", () => {
+    beforeAll(() => {
+      ensureProject(PROJECT);
+      setModelLimits({ context: 20_000, output: 2_000 });
+      // Overhead at 0 keeps the arithmetic focused on LTM (the controlled
+      // floor); the existing end-to-end floor tests (above) already cover
+      // overhead + LTM mixed.
+      calibrate(0);
+    });
+
+    test("a layer >= 1 uncalibrated session sets compressed on the input scale (floor + LTM × safety)", () => {
+      const session = `econ-scale-uc-${Date.now()}`;
+      const ltm = 5_000;
+      setLtmTokens(ltm, session);
+      try {
+        setModelLimits({ context: 2_000, output: 500 });
+        const messages = Array.from({ length: 30 }, (_, i) =>
+          makeMsg(
+            `us-${i}`,
+            i % 2 === 0 ? "user" : "assistant",
+            "A".repeat(1_000),
+            session,
+          ),
+        );
+        const result = transform({
+          messages,
+          projectPath: PROJECT,
+          sessionID: session,
+        });
+        expect(result.layer).toBeGreaterThanOrEqual(1);
+
+        const snap = getCacheSizeSnapshot(session);
+        expect(snap).not.toBeNull();
+
+        // The compressed size must match the input-scale formula exactly
+        // (body + non-message floor) × uncalibrated safety, clamped to full.
+        // Reducing it to body-only (result.totalTokens) would pass every
+        // inequality (< full, > 0) but fail this exact equality — the existing
+        // floor tests prove this discriminator works against the body-only
+        // regression. The guard is the equality itself.
+        expect(snap?.compressed).toBe(
+          computeCompressedCacheSize(
+            result.layer,
+            result.totalTokens,
+            getOverhead() + ltm,
+            UNCALIBRATED_SAFETY,
+            snap?.full ?? 0,
+          ),
+        );
+        // confirm the floor is material (non-zero LTM), not vacuously body-only.
+        expect(snap?.compressed).toBeGreaterThan(
+          Math.round(result.totalTokens * UNCALIBRATED_SAFETY),
+        );
+        expect(snap?.compressed).toBeLessThan(snap?.full ?? 0);
+      } finally {
+        setModelLimits({ context: 20_000, output: 2_000 });
+        setLtmTokens(0, session);
+        evictSession(session);
+      }
+    });
+
+    test("a layer >= 1 calibrated session sets compressed on the input scale (floor + LTM, no safety inflation)", () => {
+      const session = `econ-scale-c-${Date.now()}`;
+      const ltm = 4_000;
+      setLtmTokens(ltm, session);
+      try {
+        setModelLimits({ context: 2_000, output: 500 });
+        const messages = Array.from({ length: 30 }, (_, i) =>
+          makeMsg(
+            `cs-${i}`,
+            i % 2 === 0 ? "user" : "assistant",
+            "A".repeat(1_000),
+            session,
+          ),
+        );
+        transform({ messages, projectPath: PROJECT, sessionID: session });
+        calibrate(40_000, session);
+        const result = transform({
+          messages,
+          projectPath: PROJECT,
+          sessionID: session,
+        });
+        expect(result.layer).toBeGreaterThanOrEqual(1);
+
+        const snap = getCacheSizeSnapshot(session);
+        expect(snap).not.toBeNull();
+        // Calibrated → safety=1, so compressed = floor + body with NO ×1.5.
+        expect(snap?.compressed).toBe(
+          computeCompressedCacheSize(
+            result.layer,
+            result.totalTokens,
+            getOverhead() + ltm,
+            1,
+            snap?.full ?? 0,
+          ),
+        );
+        expect(snap?.compressed).toBeGreaterThan(result.totalTokens);
+        expect(snap?.compressed).toBeLessThan(snap?.full ?? 0);
+      } finally {
+        setModelLimits({ context: 20_000, output: 2_000 });
+        setLtmTokens(0, session);
+        evictSession(session);
+      }
+    });
+  });
 });
