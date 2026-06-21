@@ -1606,8 +1606,36 @@ const STARTUP_BACKFILL_DELAY_MS = 2_000;
  * Fire-and-forget: callers should `.catch()` — embedding failures must not
  * block plugin initialization.
  */
-export async function runStartupBackfill(): Promise<void> {
-  if (!isAvailable()) return;
+/** Outcome of a startup backfill pass, returned for host-side instrumentation
+ *  (the gateway wraps the call in a Sentry span). @loreai/core stays Sentry-free. */
+export interface BackfillStats {
+  pendingKnowledge: number;
+  pendingDistillations: number;
+  knowledgeEmbedded: number;
+  distillationEmbedded: number;
+  entityEmbedded: number;
+  knowledgeTotal: number;
+  knowledgeWithEmbedding: number;
+  distillationTotal: number;
+  distillationWithEmbedding: number;
+}
+
+function emptyBackfillStats(): BackfillStats {
+  return {
+    pendingKnowledge: 0,
+    pendingDistillations: 0,
+    knowledgeEmbedded: 0,
+    distillationEmbedded: 0,
+    entityEmbedded: 0,
+    knowledgeTotal: 0,
+    knowledgeWithEmbedding: 0,
+    distillationTotal: 0,
+    distillationWithEmbedding: 0,
+  };
+}
+
+export async function runStartupBackfill(): Promise<BackfillStats> {
+  if (!isAvailable()) return emptyBackfillStats();
 
   // Surface backlog up-front so a slow startup is self-explanatory in logs.
   // Counts use the same predicates the backfill loops use, so the two
@@ -1666,7 +1694,9 @@ export async function runStartupBackfill(): Promise<void> {
   const dWithEmb = (
     db()
       .query(
-        "SELECT COUNT(*) as n FROM distillations WHERE embedding IS NOT NULL AND archived = 0",
+        // Mirror dTotal's predicate (incl. observations != '') so the coverage
+        // numerator is always a subset of the denominator (never reads "11/10").
+        "SELECT COUNT(*) as n FROM distillations WHERE embedding IS NOT NULL AND archived = 0 AND observations != ''",
       )
       .get() as { n: number }
   ).n;
@@ -1681,6 +1711,18 @@ export async function runStartupBackfill(): Promise<void> {
     `coverage: knowledge ${kWithEmb}/${kTotal}, distillations ${dWithEmb}/${dTotal}`,
   );
   log.info(`embedding startup: ${parts.join("; ")}`);
+
+  return {
+    pendingKnowledge,
+    pendingDistillations,
+    knowledgeEmbedded,
+    distillationEmbedded,
+    entityEmbedded,
+    knowledgeTotal: kTotal,
+    knowledgeWithEmbedding: kWithEmb,
+    distillationTotal: dTotal,
+    distillationWithEmbedding: dWithEmb,
+  };
 }
 
 // ---------------------------------------------------------------------------
