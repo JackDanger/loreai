@@ -371,9 +371,10 @@ describe("pushOnce — happy path", () => {
     await pushOnce(makeClient() as never);
     db().query("DELETE FROM knowledge WHERE id='k1'").run();
     await pushOnce(makeClient() as never);
-    expect(tableRows("knowledge").find((r) => r.id === "k1")?.is_deleted).toBe(
-      true,
-    );
+    const remote = tableRows("knowledge").find((r) => r.id === "k1");
+    expect(remote?.is_deleted).toBe(true);
+    // The tombstone must carry a NULL content_hash on the wire (the contract).
+    expect(remote?.content_hash).toBeNull();
   });
 });
 
@@ -496,6 +497,29 @@ describe("pullOnce", () => {
     } as never);
     await pullOnce(makeClient() as never);
     expect(syncData.getRowById("knowledge", "kd")).toBeNull();
+  });
+
+  test("a remote tombstone that RETAINED its content_hash still deletes a content-identical local row", async () => {
+    // pushEntry soft-deletes by setting is_deleted=true but leaves the remote
+    // content_hash intact (it nulls only the LOCAL sync_state). A client pulling
+    // that tombstone must STILL apply the delete even though the hash matches its
+    // local content — otherwise classifyRemoteRow mis-classifies it "skip" and a
+    // cross-client / post-conflict delete is silently dropped (divergence).
+    syncData.enableSync("basic");
+    insertKnowledge("kt", "same");
+    await pushOnce(makeClient() as never); // remote kt: live, content_hash set
+    // Another client soft-deletes kt but the remote row KEEPS its content_hash —
+    // exactly the wire shape pushEntry produces.
+    const remoteRow = tableRows("knowledge").find(
+      (r) => r.id === "kt",
+    ) as Record<string, unknown>;
+    remoteRow.is_deleted = true;
+    remoteRow.updated_at = new Date(9_000_000).toISOString(); // past the pull cursor
+    expect(typeof remoteRow.content_hash).toBe("string"); // hash intact (the trap)
+    const r = await pullOnce(makeClient() as never);
+    expect(syncData.getRowById("knowledge", "kt")).toBeNull(); // delete propagated
+    expect(r.pulled).toBe(1); // a clean apply…
+    expect(r.conflicts).toBe(0); // …not a conflict
   });
 
   test("conflict resolves remote-wins AND preserves the discarded local row", async () => {
