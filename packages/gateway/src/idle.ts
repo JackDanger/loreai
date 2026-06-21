@@ -29,6 +29,7 @@ import {
   saveGradientState,
   getConsecutiveBusts,
   effectiveMetaThreshold,
+  getLastLayer,
   evictSession as evictGradientSession,
   distillLimiter,
   curatorLimiter,
@@ -186,6 +187,29 @@ export function consolidationCooldownActive(
  */
 export function perCategoryThreshold(maxEntries: number): number {
   return Math.ceil(maxEntries * 0.3);
+}
+
+/**
+ * After an idle tick that may have rewritten the distilled prefix (messages[1])
+ * via force-distillation / meta-consolidation, drop the cache warmer's stored
+ * body when it is now stale, and report whether it did.
+ *
+ * Stale ⇔ ALL hold:
+ *  - `prefixMutated`: idle distillation actually rewrote the distilled prefix;
+ *  - `layer >= 1`: the session is COMPRESSED, so its body actually carries the
+ *    distilled prefix. Layer-0 (full-passthrough) bodies have no distilled
+ *    prefix, so distillation doesn't change them — leave their warming untouched;
+ *  - there is a stored body to invalidate.
+ */
+export function invalidateWarmupBodyAfterIdleDistill(
+  state: SessionState,
+  prefixMutated: boolean,
+  layer: number,
+): boolean {
+  const stale =
+    prefixMutated && layer >= 1 && state.cacheAnalytics.lastRequestBody != null;
+  if (stale) state.cacheAnalytics.lastRequestBody = null;
+  return stale;
 }
 
 /**
@@ -692,6 +716,9 @@ export function buildIdleWorkHandler(
     // now means a smaller context on the next turn via post-idle compact.
     // Skip meta-distillation in the run() call: we run it as a separate
     // step below so gen-0 segments from the force-distill are counted.
+    // Tracks whether this tick's distillation rewrote the in-context distilled
+    // prefix (messages[1]). Used below to invalidate a now-stale warmup body.
+    let idlePrefixMutated = false;
     try {
       const callType =
         process.env.LORE_BATCH_DISABLED === "1"
@@ -699,7 +726,7 @@ export function buildIdleWorkHandler(
           : ("batch" as const);
       const pending = temporal.undistilledCount(projectPath, sessionID);
       if (allowWorker && pending > 0) {
-        await distillation.run({
+        const result = await distillation.run({
           llm,
           projectPath,
           sessionID,
@@ -709,6 +736,13 @@ export function buildIdleWorkHandler(
           callType,
           workerHealth: makeWorkerHealth(sessionID, "lore-distill"),
         });
+        // Only a run that actually created gen-0 segments rewrites the in-context
+        // prefix. `distilled` counts messages folded into a NEW gen-0 segment
+        // (distillation.ts:954); it stays 0 for tiny-segment absorption, worker
+        // failures, parse errors, and expansion-guard discards — which mark
+        // messages distilled WITHOUT creating gen-0, leaving the prefix (and the
+        // warmup body) unchanged. Gating on it avoids nulling a still-valid body.
+        if (result.distilled > 0) idlePrefixMutated = true;
       }
       // Meta consolidation: safe on idle because cache is already cold.
       // Run as a separate step so gen-0 segments from the force-distill
@@ -723,7 +757,7 @@ export function buildIdleWorkHandler(
       );
       const g0 = distillation.gen0Count(projectPath, sessionID);
       if (allowWorker && g0 >= metaThreshold) {
-        await distillation.metaDistill({
+        const meta = await distillation.metaDistill({
           llm,
           projectPath,
           sessionID,
@@ -731,10 +765,26 @@ export function buildIdleWorkHandler(
           callType,
           workerHealth: makeWorkerHealth(sessionID, "lore-distill"),
         });
+        // meta consolidation archives gen-0 and adds gen-1+ — rewrites the prefix.
+        if (meta) idlePrefixMutated = true;
       }
     } catch (e) {
       log.error("idle distillation error:", e);
     }
+
+    // Lore's OWN idle-time prefix mutation. When force-distillation / meta-
+    // consolidation rewrites the distilled prefix (messages[1]) of a COMPRESSED
+    // session, the body the next real turn sends diverges from the last turn's —
+    // and the idle force-distill above is explicitly preparing a smaller
+    // post-idle-compact body. So the cache warmer's stored body is now stale:
+    // replaying it would just refresh a prefix the next turn busts anyway (the
+    // large-session cacheRead=0 waste). Drop it — same rationale as the /compact
+    // and model-switch invalidations in pipeline.ts.
+    invalidateWarmupBodyAfterIdleDistill(
+      state,
+      idlePrefixMutated,
+      getLastLayer(sessionID),
+    );
 
     // 2. Curation — cost-aware frequency: on expensive worker models, curate
     //    less often (same multiplier as the inline path in pipeline.ts).
