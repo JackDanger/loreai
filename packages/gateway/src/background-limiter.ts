@@ -88,6 +88,14 @@ const LOAD_BOOST_THRESHOLD = 0.5;
 
 const limiter = pLimit(MIN_BACKGROUND_CONCURRENCY);
 
+/**
+ * In-flight (already-started) background tasks, so `drainBackground()` can await
+ * them. Only STARTED tasks are tracked — queued tasks are discarded by
+ * `clearQueue()` and would otherwise strand the drain on a promise that never
+ * settles. See `drainBackground`.
+ */
+const activeTasks = new Set<Promise<unknown>>();
+
 // ---------------------------------------------------------------------------
 // Circuit breaker (per-provider)
 // ---------------------------------------------------------------------------
@@ -286,8 +294,58 @@ export async function runBackground<T>(
       }
       return undefined as T | undefined;
     }
-    return fn();
+    // Track the actually-running task so drainBackground() can await it. Only
+    // started tasks are tracked (queued tasks aren't), so a later clearQueue()
+    // can never strand the drain on a task that will never run.
+    const task = fn();
+    activeTasks.add(task);
+    try {
+      return await task;
+    } finally {
+      activeTasks.delete(task);
+    }
   });
+}
+
+/**
+ * Await all in-flight (started) background tasks, discarding anything still
+ * queued. Used by `resetPipelineState()` on config reload / test teardown to
+ * quiesce background work before the DB is swapped — a late distillation /
+ * curation / idle `saveSessionTracking()` write must not land in the next
+ * process's (or test harness's) database as a phantom row. Bounded by
+ * `timeoutMs` so a genuinely stuck task can never hang a reset; the leak it
+ * guards against is test-only (production has a single, stable DB), so the
+ * timeout is a safety valve, not a correctness boundary. See #885.
+ */
+export async function drainBackground(timeoutMs = 5000): Promise<void> {
+  limiter.clearQueue(); // discard not-yet-started tasks — they never write
+  await boundedSettle(activeTasks, timeoutMs);
+}
+
+/**
+ * `Promise.allSettled` over `promises`, but bounded by `timeoutMs` so a stalled
+ * promise can never hang the caller. Resolves on whichever comes first. Shared
+ * by `drainBackground` (limiter tasks) and `resetPipelineState` (the direct
+ * urgent-distillation / curation chains in `inFlightBackground`) so BOTH drains
+ * carry the same hang guard. See #885.
+ */
+export async function boundedSettle(
+  promises: Iterable<Promise<unknown>>,
+  timeoutMs = 5000,
+): Promise<void> {
+  const arr = [...promises];
+  if (arr.length === 0) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<void>((resolve) => {
+    // unref so the timer can never independently hold the event loop open.
+    timer = setTimeout(resolve, timeoutMs);
+    timer.unref?.();
+  });
+  try {
+    await Promise.race([Promise.allSettled(arr), timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 /**
@@ -363,11 +421,17 @@ export function backgroundLimiterStats(): {
  * Note: `clearQueue()` only removes pending (queued) tasks — in-flight
  * tasks (up to the current concurrency cap) will continue to completion. Pending tasks resolve
  * as `undefined`, consistent with the circuit breaker skip behavior.
+ *
+ * `activeTasks` is cleared too so a started-but-unawaited task from one test
+ * can't pollute the next test's `drainBackground()` (the running task still
+ * finishes; we just stop tracking it). The drain itself empties this set via
+ * each task's `finally`, so this is belt-and-suspenders for test isolation.
  */
 export function resetBackgroundLimiter(): void {
   limiter.clearQueue();
   limiter.concurrency = MIN_BACKGROUND_CONCURRENCY;
   breakers.clear();
+  activeTasks.clear();
 }
 
 /**
