@@ -425,10 +425,16 @@ function rowIdExpr(m: SyncTableMeta): string {
 }
 
 /**
- * Enqueue an `upsert` for every live row of the synced tables. Idempotent — a
- * row that already has a pending outbox entry is skipped, so repeated calls
- * (e.g. re-enable) don't pile up duplicates. The push path further skips rows
- * whose `content_hash` is unchanged, so a redundant upsert costs nothing.
+ * Enqueue an `upsert` for every live row whose LATEST pending outbox op is not
+ * already an `upsert` — i.e. rows with no pending entry, or rows whose newest
+ * pending entry is a `delete`. This stays idempotent (a row already queued as an
+ * upsert is not re-queued) while guaranteeing a live row always has a TRAILING
+ * upsert. Without that guarantee, a row deleted-then-recreated across a sync
+ * disable/enable boundary keeps only its stale (coalesced) `delete` — `seedOutbox`
+ * would skip it on re-enable, the delete would push (a no-op on a row never
+ * uploaded), and the live row would be silently orphaned, never synced. The push
+ * path further skips rows whose `content_hash` is unchanged, so a redundant upsert
+ * costs nothing.
  */
 export function seedOutbox(tier: SyncTier = "basic"): void {
   const now = Date.now();
@@ -442,9 +448,12 @@ export function seedOutbox(tier: SyncTier = "basic"): void {
       .query(
         `INSERT INTO sync_outbox (table_name, row_id, op, changed_at)
          SELECT ?, ${idExpr}, 'upsert', ? FROM ${m.table} t
-         WHERE NOT EXISTS (
-           SELECT 1 FROM sync_outbox o WHERE o.table_name = ? AND o.row_id = ${idExpr}
-         )`,
+         WHERE COALESCE(
+           (SELECT o.op FROM sync_outbox o
+            WHERE o.table_name = ? AND o.row_id = ${idExpr}
+            ORDER BY o.seq DESC LIMIT 1),
+           'none'
+         ) <> 'upsert' `,
       )
       .run(m.table, now, m.table);
   }
@@ -697,8 +706,10 @@ export function isSyncEnabled(): boolean {
 /**
  * Enable change-capture and reconcile the outbox against current state, so both
  * first-enable (uploads pre-existing rows) and re-enable (catches edits/deletes
- * made while sync was OFF) are captured. Idempotent — `reconcile` skips rows
- * that already have a pending outbox entry.
+ * made while sync was OFF) are captured. Idempotent — `reconcile` only adds an
+ * upsert for a live row whose latest pending entry isn't already an upsert (so a
+ * row recreated after a pending delete still gets a trailing upsert; see
+ * `seedOutbox`).
  */
 export function enableSync(tier: SyncTier = "basic"): void {
   setTeamConfig(ENABLED_KEY, "1");
