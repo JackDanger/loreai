@@ -4447,6 +4447,29 @@ function scheduleBackgroundWork(
   // work. Undefined when the worker model can't be resolved (→ global breaker).
   const workerProviderID = model?.providerID;
 
+  // Provider-aware auth guard: if the resolved worker model's provider has no
+  // usable credential for this session, every background worker call to it just
+  // returns no-auth and degrades worker-health each tick. This mirrors the
+  // worker's own resolution (resolveAuth with the model's provider, incl. the
+  // cross-provider fail-closed). The provider-agnostic guard above misses this:
+  // a session can hold a credential under provider A while lastUpstream points
+  // at provider B (e.g. a turn declared x-lore-provider:anthropic but stored no
+  // anthropic key). Skip instead of flooding — getSessionAuth emits the
+  // store-key/lookup-key mismatch warning once, then we stay quiet, and work
+  // resumes automatically once a turn uses a provider we hold a credential for.
+  // Gates urgent distillation too: a no-auth call can never succeed. #894
+  // Exempt the dedicated-worker-key setup (LORE_WORKER_API_KEY): there the
+  // worker uses its own credential and bypasses resolveAuth (getWorkerAuth,
+  // ~1697), so a session-auth miss must NOT disable background work — that
+  // cross-provider config (e.g. MiniMax workers, Anthropic sessions) is exactly
+  // when model.providerID legitimately differs from the session's credential.
+  if (
+    !config.workerApiKey &&
+    model &&
+    !resolveAuth(sessionID, model.providerID)
+  )
+    return;
+
   // When the OAuth account is near quota exhaustion, skip non-urgent
   // background work to preserve remaining entitlement for user-facing turns.
   // Urgent distillation is exempt (it unblocks the next user turn).
