@@ -9,6 +9,7 @@
 import * as Sentry from "@sentry/bun";
 import { getInstanceId, embedding } from "@loreai/core";
 import { createHash } from "node:crypto";
+import { freemem } from "node:os";
 import { monitorEventLoopDelay, type IntervalHistogram } from "node:perf_hooks";
 
 // ---------------------------------------------------------------------------
@@ -662,4 +663,90 @@ export async function spanStartupBackfill(
       span.setAttribute("rss_delta_bytes", rssAfter - rssBefore);
     },
   );
+}
+
+// ---------------------------------------------------------------------------
+// Client-abort-under-pressure capture
+// ---------------------------------------------------------------------------
+
+/** Current event-loop-delay p99 in ms — a *peek* that does NOT reset the
+ *  window (unlike emitResourceGauge). 0 when the monitor isn't running. */
+export function getEventLoopLagP99Ms(): number {
+  if (!eventLoopDelayHist) return 0;
+  try {
+    return eventLoopDelayHist.percentile(99) / 1e6;
+  } catch {
+    return 0;
+  }
+}
+
+/** A client abort is only worth a Sentry event when it coincides with host
+ *  pressure: a long in-flight time or a stalled event loop. Below these,
+ *  disconnects are normal connection lifecycle and must not be captured. */
+/** Event-loop p99 at/above this (ms) means the loop is stalled — swap/CPU
+ *  pressure, the ConnectTimeout symptom. */
+const ABORT_PRESSURE_LAG_MS = 1_000;
+/** Free memory at/below this is critically low — the host is near swap/OOM
+ *  (the embedding worker baseline alone is ~400 MB). Coarse floor; gates a
+ *  telemetry event only, not behavior. */
+const ABORT_PRESSURE_FREEMEM_BYTES = 512 * 1024 * 1024;
+
+/**
+ * True when the HOST is under pressure: the event loop is stalled OR free
+ * memory is critically low. Deliberately based on host state, not request
+ * duration — a long-lived stream cancelled on a healthy host is a normal abort,
+ * not pressure (in-flight time is recorded as context, never as the gate). Pure
+ * for unit testing.
+ */
+export function isAbortUnderPressure(
+  lagP99Ms: number,
+  freeMemBytes: number,
+): boolean {
+  return (
+    lagP99Ms >= ABORT_PRESSURE_LAG_MS ||
+    freeMemBytes <= ABORT_PRESSURE_FREEMEM_BYTES
+  );
+}
+
+/**
+ * Capture a client-abort event ONLY when it coincides with host pressure
+ * (in-flight ≥ 10s OR event-loop p99 ≥ 1s), with memory + loop-lag context, so
+ * client disconnects can be correlated with the embedding-OOM / swap stalls
+ * that manifest upstream as ConnectTimeout. Normal aborts are dropped to avoid
+ * Sentry noise. Gated on Sentry; never throws (called from request-path catch
+ * blocks).
+ */
+export function captureClientAbortUnderPressure(ctx: {
+  startMs: number;
+  route: string;
+  sessionID?: string;
+}): void {
+  // Whole body in try — even Sentry.isInitialized() must not throw out of a
+  // request-path catch and turn a clean error response into a rejected promise.
+  try {
+    if (!Sentry.isInitialized()) return;
+    const lagP99Ms = getEventLoopLagP99Ms();
+    const freeMemBytes = freemem();
+    if (!isAbortUnderPressure(lagP99Ms, freeMemBytes)) {
+      return; // healthy host — a normal abort, not worth an event
+    }
+    const mem = process.memoryUsage();
+    Sentry.captureMessage("Client abort under host pressure", {
+      level: "warning",
+      // One grouped issue per route, not one per disconnect.
+      fingerprint: ["client-abort-under-pressure", ctx.route],
+      contexts: {
+        abort_pressure: {
+          route: ctx.route,
+          session_id: ctx.sessionID ?? "unknown",
+          time_in_flight_ms: Date.now() - ctx.startMs,
+          event_loop_lag_p99_ms: Math.round(lagP99Ms),
+          rss_bytes: mem.rss,
+          free_memory_bytes: freeMemBytes,
+        },
+      },
+    });
+  } catch {
+    // Telemetry must never break the request path.
+  }
 }

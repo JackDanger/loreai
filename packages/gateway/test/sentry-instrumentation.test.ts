@@ -3,6 +3,9 @@ import {
   spanStartupBackfill,
   emitResourceGauge,
   startResourceMonitor,
+  isAbortUnderPressure,
+  getEventLoopLagP99Ms,
+  captureClientAbortUnderPressure,
 } from "../src/sentry";
 
 const stats = {
@@ -46,5 +49,38 @@ describe("embedding/resource instrumentation helpers", () => {
   it("startResourceMonitor is a safe, idempotent no-op", () => {
     expect(() => startResourceMonitor()).not.toThrow();
     expect(() => startResourceMonitor()).not.toThrow();
+  });
+});
+
+describe("client-abort-under-pressure", () => {
+  const MB = 1024 * 1024;
+  const GB = 1024 * MB;
+  it("fires only when the loop is stalled (>=1s) or free memory is critically low (<=512MB)", () => {
+    // Healthy host (fast loop, plenty of memory) → normal abort, not captured —
+    // even a long-lived stream cancellation is dropped.
+    expect(isAbortUnderPressure(200, 4 * GB)).toBe(false);
+    expect(isAbortUnderPressure(999, 513 * MB)).toBe(false);
+    // Event-loop stalled (boundary inclusive).
+    expect(isAbortUnderPressure(1_000, 8 * GB)).toBe(true);
+    expect(isAbortUnderPressure(5_000, 8 * GB)).toBe(true);
+    // Free memory critically low (boundary inclusive).
+    expect(isAbortUnderPressure(0, 512 * MB)).toBe(true);
+    expect(isAbortUnderPressure(0, 100 * MB)).toBe(true);
+  });
+
+  it("getEventLoopLagP99Ms returns a non-negative number", () => {
+    const lag = getEventLoopLagP99Ms();
+    expect(typeof lag).toBe("number");
+    expect(lag).toBeGreaterThanOrEqual(0);
+  });
+
+  it("captureClientAbortUnderPressure is a safe no-op when Sentry is off", () => {
+    expect(() =>
+      captureClientAbortUnderPressure({
+        startMs: Date.now() - 30_000,
+        route: "stream",
+        sessionID: "abc",
+      }),
+    ).not.toThrow();
   });
 });

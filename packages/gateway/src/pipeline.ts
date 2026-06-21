@@ -222,6 +222,7 @@ import {
   emitWarmupHitMetric,
   emitCurationMetrics,
   spanStartupBackfill,
+  captureClientAbortUnderPressure,
   type AnthropicUsage,
 } from "./sentry";
 import {
@@ -3088,6 +3089,9 @@ function buildStreamingResponse(
   },
   /** When set, prepend a synthetic warning content block to the stream. */
   warningText?: string,
+  /** Session id, for telemetry (abort-under-pressure capture). Passed
+   *  independently of recallContext so non-recall turns are still attributable. */
+  sessionID?: string,
 ): Response {
   const recallAccum = recallContext
     ? createRecallAwareAccumulator(RECALL_TOOL_NAME, { scaleClientUsage: true })
@@ -3095,6 +3099,9 @@ function buildStreamingResponse(
   const accumulator: StreamAccumulator =
     recallAccum ?? createStreamAccumulator({ scaleClientUsage: true });
   const encoder = new TextEncoder();
+  // Start of the client-facing stream — used to flag aborts that happen after
+  // a long in-flight time (a host-pressure signal; see the abort catch below).
+  const streamStartMs = Date.now();
 
   // Client-disconnect detection: shared between start() and cancel()
   let cancelled = false;
@@ -3510,6 +3517,12 @@ function buildStreamingResponse(
           err instanceof DOMException && err.name === "AbortError";
         if (isAbort) {
           log.info("streaming pipeline aborted (client disconnect)");
+          // Only surfaces to Sentry if the host was under pressure at abort time.
+          captureClientAbortUnderPressure({
+            startMs: streamStartMs,
+            route: "stream",
+            sessionID,
+          });
         } else {
           log.error("streaming pipeline error:", err);
         }
@@ -6954,6 +6967,7 @@ async function handleConversationTurn(
         ? { modifiedReq, config, sessionState, cacheOptions }
         : undefined,
       warningText,
+      sessionState.sessionID,
     );
     // Translate to client's wire format if needed. When the upstream is
     // Anthropic but the client speaks OpenAI, wrap the Anthropic SSE stream.
@@ -7603,6 +7617,7 @@ export async function handleRequest(
   req: GatewayRequest,
   config: GatewayConfig,
 ): Promise<Response> {
+  const requestStartMs = Date.now();
   try {
     // Guard against malformed invocations (e.g. fuzzers / direct module calls
     // that pass an undefined or header-less request). The real server path
@@ -7675,6 +7690,11 @@ export async function handleRequest(
     const isAbort = err instanceof DOMException && err.name === "AbortError";
     if (isAbort) {
       log.info("pipeline aborted (client disconnect)");
+      // Only surfaces to Sentry if the host was under pressure at abort time.
+      captureClientAbortUnderPressure({
+        startMs: requestStartMs,
+        route: "request",
+      });
     } else {
       log.error("pipeline error:", err);
     }
