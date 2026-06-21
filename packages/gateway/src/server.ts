@@ -20,6 +20,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { DEFAULT_PORT, type GatewayConfig } from "./config";
 import { bootstrapDailySpend, getDailyBudget } from "./cost-tracker";
+import { setupEmbeddingFailureCapture } from "./sentry";
 import type { GatewayRequest } from "./translate/types";
 import { parseAnthropicRequest } from "./translate/anthropic";
 import { parseOpenAIRequest } from "./translate/openai";
@@ -355,6 +356,10 @@ export async function startServer(config: GatewayConfig): Promise<{
   if (getDailyBudget() > 0) {
     bootstrapDailySpend();
   }
+
+  // Wire embedding-worker OOM backoff/latch events to Sentry. Idempotent: the
+  // hook is assigned (not stacked), so a repeat startServer() is harmless.
+  setupEmbeddingFailureCapture();
 
   // Shared fetch handler for all server instances.
   const fetch = async (req: Request): Promise<Response> => {
