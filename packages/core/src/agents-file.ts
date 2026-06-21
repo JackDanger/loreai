@@ -555,6 +555,7 @@ export function shouldImport(input: {
  */
 function _importEntries(entries: ParsedFileEntry[], projectPath: string): void {
   const seenIds = new Set<string>();
+  const pid = ensureProject(projectPath); // loop-invariant — resolve once
 
   for (const entry of entries) {
     if (entry.id !== null) {
@@ -564,6 +565,19 @@ function _importEntries(entries: ParsedFileEntry[], projectPath: string): void {
 
       // entry.id is the <!-- lore:UUID --> marker, which is the stable logical_id.
       const existing = ltm.getByLogical(entry.id);
+      // Security (A2, #823): a marker that resolves to a DIFFERENT project's
+      // project-scoped entry is foreign — e.g. a .lore.md copied between projects,
+      // or a crafted file carrying another project's UUID. Never overwrite another
+      // project's private knowledge; skip it. (Cross-project / global entries are
+      // intentionally shared, so they stay updatable.)
+      if (
+        existing &&
+        existing.cross_project === 0 &&
+        existing.project_id !== null &&
+        existing.project_id !== pid
+      ) {
+        continue;
+      }
       if (existing) {
         // Known entry — update only if content changed (manual edit in file). Pass
         // the resolved current row id (Seer #848): update() resolves it to the
@@ -577,7 +591,6 @@ function _importEntries(entries: ParsedFileEntry[], projectPath: string): void {
         // Check for a fuzzy title match before creating — prevents duplicates
         // when two machines independently create entries for the same concept
         // with different UUIDs but similar titles.
-        const pid = ensureProject(projectPath);
         const fuzzyMatch = ltm.findFuzzyDuplicate({
           title: entry.title,
           projectId: pid,
