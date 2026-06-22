@@ -104,6 +104,101 @@ export function classifyToolError(_tool: string, error: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Verifier classification (outcome-reward loop, #497)
+// ---------------------------------------------------------------------------
+
+/**
+ * Recognizes a test / build / typecheck / lint runner at the START of a command
+ * segment. Anchoring to command position (rather than matching the token
+ * anywhere) is what makes the verdict high-precision: `pnpm test` matches, but
+ * `cat vitest.config.ts`, `vim biome.json`, and `echo 'run mypy'` do NOT — they
+ * merely mention a runner. Optional benign prefixes (sudo/env/time/npx/…) are
+ * skipped so `npx vitest` / `sudo pnpm test` still match. A non-match means "not
+ * a verifier" (no signal), the safe default for a confidence-adjusting loop.
+ */
+const VERIFIER_LEADING = new RegExp(
+  // optional leading prefixes that precede the real command
+  String.raw`^\s*(?:(?:sudo|time|npx|bunx)\s+|\w+=\S+\s+|env\s+)*` +
+    "(?:" +
+    [
+      // package-manager script runners
+      String.raw`(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|build|typecheck|type-check|lint|tsc|check)\b`,
+      // direct test runners
+      String.raw`(?:vitest|jest|mocha|ava|pytest|rspec|phpunit|gotestsum)\b`,
+      String.raw`(?:go|cargo|gradle|mvn|dotnet)\s+test\b`,
+      // typecheck / compile
+      String.raw`(?:tsc|tsgo)\b`,
+      String.raw`(?:go|cargo)\s+build\b`,
+      // linters / formatters used as gates
+      String.raw`(?:eslint|biome|ruff|flake8|mypy|clippy|golangci-lint)\b`,
+    ].join("|") +
+    ")",
+  "i",
+);
+
+/**
+ * Best-effort extraction of a shell command string from a tool call's `input`
+ * (host-shaped, hence `unknown`). Handles the common bash shape
+ * (`{ command: string }` / `{ cmd: string }`) and a bare string; returns null
+ * when no command is recoverable (the call is then treated as a non-verifier).
+ */
+export function extractCommand(input: unknown): string | null {
+  if (typeof input === "string") return input;
+  if (input && typeof input === "object") {
+    const o = input as Record<string, unknown>;
+    if (typeof o.command === "string") return o.command;
+    if (typeof o.cmd === "string") return o.cmd;
+  }
+  return null;
+}
+
+/**
+ * True when a tool call's `input` invokes a recognized verifier. The command is
+ * split into segments on the shell chaining/pipe operators (`&&`, `||`, `;`,
+ * `|`, newline) and a segment counts only when a runner leads it — so
+ * `cd pkg && pnpm test` matches (2nd segment) while `cat vitest.config.ts` and
+ * `grep biome .` do not.
+ */
+export function isVerifierCall(input: unknown): boolean {
+  const cmd = extractCommand(input);
+  if (!cmd) return false;
+  return cmd
+    .split(/&&|\|\||[;\n|]/)
+    .some((segment) => VERIFIER_LEADING.test(segment));
+}
+
+export type SessionVerifierVerdict = "pass" | "fail" | "none";
+
+/**
+ * Derive a session's verifier verdict from its recorded tool calls:
+ *  - `fail` if ANY verifier call errored (status='error'); a failing verifier is
+ *    a decisive negative signal regardless of later passes.
+ *  - `pass` if ≥1 verifier call completed and none errored.
+ *  - `none` if the session ran no verifier calls — no outcome signal.
+ *
+ * Only `verifier = 1` calls count, so incidental command failures (a missing
+ * file, a `grep` miss) never move knowledge confidence.
+ */
+export function sessionVerifierVerdict(
+  projectPath: string,
+  sessionID: string,
+): SessionVerifierVerdict {
+  const pid = ensureProject(projectPath);
+  const row = db()
+    .query(
+      `SELECT
+         SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS fails,
+         SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS passes
+       FROM tool_calls
+       WHERE project_id = ? AND session_id = ? AND verifier = 1`,
+    )
+    .get(pid, sessionID) as { fails: number | null; passes: number | null };
+  if ((row?.fails ?? 0) > 0) return "fail";
+  if ((row?.passes ?? 0) > 0) return "pass";
+  return "none";
+}
+
+// ---------------------------------------------------------------------------
 // Aggregation accessors
 // ---------------------------------------------------------------------------
 
