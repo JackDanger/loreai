@@ -133,6 +133,16 @@ import {
   type AnthropicCacheOptions,
 } from "./translate/anthropic";
 import {
+  buildBedrockRequestBody,
+  buildBedrockHeaders,
+  bedrockInvokeUrl,
+  bedrockInvokeNoStreamUrl,
+  resolveBedrockModelID,
+  parseBedrockResponseJSON,
+} from "./translate/bedrock";
+import { signBedrockRequest } from "./bedrock-auth";
+import { decodeBedrockEventStream } from "./bedrock-stream";
+import {
   buildOpenAIUpstreamRequest,
   buildOpenAIResponse,
 } from "./translate/openai";
@@ -2862,7 +2872,12 @@ type UpstreamResult = {
   /** The serialized JSON body sent to the upstream provider. */
   serializedBody: string;
   /** The wire protocol used for the upstream request (may differ from ingress). */
-  effectiveProtocol: "anthropic" | "openai" | "openai-responses";
+  effectiveProtocol:
+    | "anthropic"
+    | "openai"
+    | "openai-responses"
+    | "bedrock"
+    | "vertex";
 };
 
 /**
@@ -2908,8 +2923,18 @@ async function forwardToUpstream(
   // (either providerRoute.url or headerUpstream). When url is null (local/
   // custom providers like vllm, github-copilot), the protocol should come
   // from whichever tier actually provides the URL to avoid mismatches.
+  //
+  // EXCEPTION: self-URL-building protocols (bedrock builds
+  // bedrock-runtime.<region>.amazonaws.com from config; vertex likewise) are
+  // usable with a null url and no X-Lore-Upstream-URL — otherwise
+  // `X-Lore-Provider: bedrock` would fall through to the model-prefix route
+  // (api.anthropic.com for claude-* IDs) and silently bypass Bedrock entirely.
+  const selfUrlBuildingProtocol =
+    providerRoute?.protocol === "bedrock" ||
+    providerRoute?.protocol === "vertex";
   const providerRouteUsable =
-    providerRoute && (providerRoute.url != null || headerUpstream)
+    providerRoute &&
+    (providerRoute.url != null || headerUpstream || selfUrlBuildingProtocol)
       ? providerRoute
       : null;
 
@@ -2923,8 +2948,22 @@ async function forwardToUpstream(
       ? "openai-responses"
       : (providerRouteUsable?.protocol ?? modelRoute?.protocol ?? req.protocol);
 
+  // Self-URL-building protocols derive their base from config (region), not
+  // from the route tables. This must take precedence over `modelRoute?.url`:
+  // a claude-* model ID resolves to api.anthropic.com via the model-prefix
+  // route, which would otherwise mask the real Bedrock/Vertex base in logs and
+  // the auth-mismatch check (the Bedrock branch builds its own request URL, so
+  // this is also defensive for any future consumer of effectiveUpstreamBase).
+  // An explicit X-Lore-Upstream-URL header still wins.
+  const selfBuiltUpstreamUrl =
+    effectiveProtocol === "bedrock"
+      ? `https://bedrock-runtime.${config.bedrockRegion}.amazonaws.com`
+      : effectiveProtocol === "vertex"
+        ? `https://${config.vertexRegion}-aiplatform.googleapis.com`
+        : null;
   const effectiveUpstreamBase =
     headerUpstream ??
+    selfBuiltUpstreamUrl ??
     providerRoute?.url ??
     modelRoute?.url ??
     (effectiveProtocol === "anthropic"
@@ -2973,6 +3012,64 @@ async function forwardToUpstream(
     );
   }
 
+  if (effectiveProtocol === "bedrock") {
+    // AWS Bedrock: build request body, sign with SigV4, decode event-stream.
+    // The model ID must be mapped to Bedrock format and the URL is region-specific.
+    // cch billing header is NOT applicable (Anthropic-first-party only).
+    const bedrockModelId = resolveBedrockModelID(req.model);
+    const bedrockUrl = req.stream
+      ? bedrockInvokeUrl(config.bedrockRegion, bedrockModelId)
+      : bedrockInvokeNoStreamUrl(config.bedrockRegion, bedrockModelId);
+
+    const bedrockBody = buildBedrockRequestBody(req, cache);
+    const bedrockHeaders = buildBedrockHeaders(req);
+    const serializedBedrockBody = JSON.stringify(bedrockBody);
+
+    // SigV4 sign the request (mutates headers with Authorization, x-amz-*, etc.)
+    await signBedrockRequest(
+      "POST",
+      bedrockUrl,
+      bedrockHeaders,
+      serializedBedrockBody,
+      config.bedrockRegion,
+      config.bedrockProfile,
+    );
+
+    // Apply user-supplied extra headers (corporate proxies, etc.)
+    applyUpstreamExtraHeaders(bedrockHeaders, config.upstreamExtraHeaders);
+
+    const effectiveInterceptorBR = interceptor ?? activeInterceptor;
+    if (effectiveInterceptorBR) {
+      const response = await effectiveInterceptorBR(
+        bedrockBody,
+        req.model,
+        req.stream,
+        () =>
+          upstreamFetch(bedrockUrl, {
+            method: "POST",
+            headers: bedrockHeaders,
+            body: serializedBedrockBody,
+          }),
+      );
+      return {
+        response,
+        serializedBody: serializedBedrockBody,
+        effectiveProtocol,
+      };
+    }
+
+    const response = await upstreamFetch(bedrockUrl, {
+      method: "POST",
+      headers: bedrockHeaders,
+      body: serializedBedrockBody,
+    });
+    return {
+      response,
+      serializedBody: serializedBedrockBody,
+      effectiveProtocol,
+    };
+  }
+
   if (effectiveProtocol === "openai-responses") {
     // Inject LTM into system prompt for non-Anthropic paths.
     // Anthropic handles LTM via separate system blocks in buildAnthropicRequest;
@@ -3007,6 +3104,15 @@ async function forwardToUpstream(
     url = result.url;
     headers = result.headers;
     body = result.body;
+  } else if (effectiveProtocol === "vertex") {
+    // Vertex AI is part 2 of issue #870 and has no upstream builder yet. Fail
+    // LOUD rather than silently falling through to the Anthropic builder below
+    // (which would POST Anthropic-shaped, x-api-key-authed requests to a Vertex
+    // URL). No PROVIDER_ROUTES entry produces "vertex" today, so this is a
+    // forward guard for when the route lands without its handler.
+    throw new Error(
+      "Vertex AI upstream is not yet implemented (issue #870 part 2)",
+    );
   } else {
     // For non-native-Anthropic upstreams (MiniMax, Fireworks, etc.), downgrade
     // extended cache TTL ("1h") to standard 5-minute ephemeral — the "1h" TTL
@@ -3138,6 +3244,9 @@ function buildStreamingResponse(
   sessionID?: string,
   /** Per-model client-usage cap (anti-compaction). Defaults to the 200K cap. */
   maxReportedUsage: number = DEFAULT_MAX_REPORTED_USAGE,
+  /** Upstream wire protocol. When "bedrock", decode AWS event-stream → SSE
+   *  before feeding events to the accumulator. Default: "anthropic" (SSE). */
+  upstreamProtocol?: "anthropic" | "bedrock",
 ): Response {
   const recallAccum = recallContext
     ? createRecallAwareAccumulator(RECALL_TOOL_NAME, {
@@ -3230,7 +3339,13 @@ function buildStreamingResponse(
         const warningOffset = warningText ? 1 : 0;
 
         resetKeepalive();
-        for await (const { event, data } of parseSSEStream(reader)) {
+        // Bedrock uses AWS binary event-stream framing instead of SSE.
+        // Decode it to { event, data } pairs before feeding the accumulator.
+        const eventStream =
+          upstreamProtocol === "bedrock"
+            ? decodeBedrockEventStream(reader)
+            : parseSSEStream(reader);
+        for await (const { event, data } of eventStream) {
           resetKeepalive(); // upstream is alive — reset inactivity timer
           const forwarded = accumulator.processEvent(event, data);
           if (forwarded) {
@@ -3617,7 +3732,12 @@ function buildStreamingResponse(
  */
 async function accumulateNonStreamResponse(
   upstreamResponse: Response,
-  protocol: "anthropic" | "openai" | "openai-responses" = "anthropic",
+  protocol:
+    | "anthropic"
+    | "openai"
+    | "openai-responses"
+    | "bedrock"
+    | "vertex" = "anthropic",
 ): Promise<GatewayResponse> {
   // Some providers (e.g. DeepSeek) return SSE-formatted responses even when
   // stream: false was sent. Detect this via content-type and extract the JSON
@@ -3636,6 +3756,9 @@ async function accumulateNonStreamResponse(
       return accumulateOpenAINonStreamJSON(json);
     case "openai-responses":
       return accumulateResponsesNonStreamJSON(json);
+    case "bedrock":
+      // Bedrock non-streaming returns the same JSON structure as Anthropic
+      return parseBedrockResponseJSON(json);
     default:
       return accumulateAnthropicNonStreamJSON(json);
   }
@@ -4328,17 +4451,40 @@ function postResponse(
     const lpProvider = extractProviderHeader(req.rawHeaders);
     const lpRoute = lpProvider ? resolveProviderRoute(lpProvider) : null;
     const lpHeaderUpstream = extractUpstreamUrlHeader(req.rawHeaders);
+    // MUST mirror `providerRouteUsable` in forwardToUpstream: self-URL-building
+    // protocols (bedrock/vertex build their region URL from config) are usable
+    // with a null route url. Without this, a `X-Lore-Provider: bedrock` session
+    // would record snapshotProtocol "anthropic" (via the claude-* model route)
+    // in the UpstreamSnapshot that workers/warmer/idle treat as source of truth.
+    const lpSelfUrlBuilding =
+      lpRoute?.protocol === "bedrock" || lpRoute?.protocol === "vertex";
     const lpRouteUsable =
-      lpRoute && (lpRoute.url != null || lpHeaderUpstream) ? lpRoute : null;
-    const snapshotProtocol: "anthropic" | "openai" | "openai-responses" =
+      lpRoute && (lpRoute.url != null || lpHeaderUpstream || lpSelfUrlBuilding)
+        ? lpRoute
+        : null;
+    const snapshotProtocol:
+      | "anthropic"
+      | "openai"
+      | "openai-responses"
+      | "bedrock"
+      | "vertex" =
       req.protocol === "openai-responses"
         ? "openai-responses"
         : (lpRouteUsable?.protocol ??
           resolveUpstreamRoute(req.model)?.protocol ??
           req.protocol);
 
+    // Self-URL-building protocols derive their base from config (region) — mirror
+    // effectiveUpstreamBase so the snapshot url isn't empty/wrong for bedrock.
+    const lpSelfBuiltUrl =
+      snapshotProtocol === "bedrock"
+        ? `https://bedrock-runtime.${config.bedrockRegion}.amazonaws.com`
+        : snapshotProtocol === "vertex"
+          ? `https://${config.vertexRegion}-aiplatform.googleapis.com`
+          : null;
+
     const upstreamSnapshot: UpstreamSnapshot = {
-      url: lpHeaderUpstream ?? lpRoute?.url ?? "",
+      url: lpHeaderUpstream ?? lpSelfBuiltUrl ?? lpRoute?.url ?? "",
       protocol: snapshotProtocol,
       providerID: lpProvider || undefined,
       model: req.model,
@@ -5259,6 +5405,26 @@ async function handlePassthrough(
       if (req.protocol === "openai-responses") {
         return translateAnthropicStreamToResponses(anthropicSSE);
       }
+    }
+    if (effectiveProtocol === "bedrock") {
+      // Bedrock event-stream → decode to Anthropic SSE, then translate if needed.
+      // Meta requests (title gen, summaries) are non-cached, so no cch concerns.
+      const anthropicSSE = buildStreamingResponse(
+        upstreamResponse,
+        () => {},
+        undefined,
+        undefined,
+        undefined,
+        maxReportedUsageForModelID(req.model),
+        "bedrock",
+      );
+      if (req.protocol === "openai") {
+        return translateAnthropicStreamToOpenAI(anthropicSSE);
+      }
+      if (req.protocol === "openai-responses") {
+        return translateAnthropicStreamToResponses(anthropicSSE);
+      }
+      return anthropicSSE;
     }
     // Other cross-protocol streaming combos: accumulate + re-emit
     const resp = await accumulateNonStreamResponse(
@@ -7097,6 +7263,7 @@ async function handleConversationTurn(
       // Cap usage against the model the CLIENT meters against (its requested
       // model), so a 1M-context model isn't throttled to the 200K cap.
       maxReportedUsageForModelID(req.model),
+      effectiveProtocol === "bedrock" ? "bedrock" : "anthropic",
     );
     // Translate to client's wire format if needed. When the upstream is
     // Anthropic but the client speaks OpenAI, wrap the Anthropic SSE stream.
