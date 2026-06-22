@@ -6,7 +6,7 @@ import {
   setKV,
   deleteTeamConfig,
 } from "@loreai/core";
-import { log, syncData } from "@loreai/core";
+import { ltm, log, syncData } from "@loreai/core";
 
 // --- Fake Supabase client ----------------------------------------------------
 // In-memory per-table store with the PostgREST surface the engine uses, PLUS
@@ -256,6 +256,18 @@ function insertKnowledge(id: string, content: string): void {
        VALUES (?, ?, 'pattern', 'T', ?, ?, ?)`,
     )
     .run(id, pid, content, now(), now());
+}
+
+// Knowledge is append-only (A2): a pulled change appends a new version and a
+// pulled delete appends a death-cert, so the CURRENT live content is in
+// knowledge_current keyed by logical_id — not the base row addressed by getRowById.
+function currentContent(logicalId: string): string | null {
+  const r = db()
+    .query(
+      "SELECT content FROM knowledge_current WHERE COALESCE(logical_id, id) = ?",
+    )
+    .get(logicalId) as { content: string } | undefined;
+  return r?.content ?? null;
 }
 function insertEntity(id: string): void {
   const pid = ensureProject("/tmp/lore-sync-engine");
@@ -597,7 +609,7 @@ describe("pullOnce", () => {
       updated_at: new Date(2_000_000).toISOString(),
     });
     await pullOnce(makeClient() as never);
-    expect(syncData.getRowById("knowledge", "kr")?.content).toBe("from server");
+    expect(currentContent("kr")).toBe("from server");
 
     syncData.withApplying(() => insertKnowledge("kd", "x"));
     tableRows("knowledge").push({
@@ -608,7 +620,7 @@ describe("pullOnce", () => {
       updated_at: new Date(3_000_000).toISOString(),
     } as never);
     await pullOnce(makeClient() as never);
-    expect(syncData.getRowById("knowledge", "kd")).toBeNull();
+    expect(currentContent("kd")).toBeNull(); // death-cert applied → no live current
   });
 
   test("a remote tombstone that RETAINED its content_hash still deletes a content-identical local row", async () => {
@@ -629,7 +641,7 @@ describe("pullOnce", () => {
     remoteRow.updated_at = new Date(9_000_000).toISOString(); // past the pull cursor
     expect(typeof remoteRow.content_hash).toBe("string"); // hash intact (the trap)
     const r = await pullOnce(makeClient() as never);
-    expect(syncData.getRowById("knowledge", "kt")).toBeNull(); // delete propagated
+    expect(currentContent("kt")).toBeNull(); // delete propagated (death-cert)
     expect(r.pulled).toBe(1); // a clean apply…
     expect(r.conflicts).toBe(0); // …not a conflict
   });
@@ -652,12 +664,164 @@ describe("pullOnce", () => {
     });
     const r = await pullOnce(makeClient() as never);
     expect(r.conflicts).toBe(1);
-    expect(syncData.getRowById("knowledge", "kc")?.content).toBe("remote-edit");
+    expect(currentContent("kc")).toBe("remote-edit"); // remote wins → new current version
     // The discarded local edit is recoverable from sync_conflicts.local_content.
     const row = db()
       .query("SELECT local_content FROM sync_conflicts WHERE row_id='kc'")
       .get() as { local_content: string };
     expect(JSON.parse(row.local_content).content).toBe("local-edit");
+  });
+
+  test("a versioned (v2+) entry echo-pulls as skip — NO false conflict (#823, Seer)", async () => {
+    // BLOCKER regression: classifyRemoteRow must hash the CURRENT version
+    // (knowledge_current, keyed by logical_id), not the demoted v1 base row that
+    // getRowById(id=logical_id) returns. Reverting that fix makes this fail with
+    // conflicts=1 / pulled=1 and a stale (v1) sync_conflicts.local_content.
+    syncData.enableSync("basic");
+    const id = ltm.create({
+      projectPath: "/tmp/lore-sync-engine",
+      scope: "project",
+      category: "pattern",
+      title: "V",
+      content: "v1",
+    });
+    ltm.update(id, { content: "v2" }); // append v2 → current row id ≠ logical_id (id)
+    await pushOnce(makeClient() as never);
+    // Pulling our OWN just-pushed current content must classify skip, not conflict.
+    const r = await pullOnce(makeClient() as never);
+    expect(r.conflicts).toBe(0);
+    expect(r.pulled).toBe(0);
+    expect(currentContent(id)).toBe("v2");
+    expect(
+      (
+        db()
+          .query("SELECT COUNT(*) AS n FROM sync_conflicts WHERE row_id = ?")
+          .get(id) as { n: number }
+      ).n,
+    ).toBe(0); // no false conflict recorded
+  });
+
+  test("conflict on a versioned (v2) entry snapshots the CURRENT version, not stale v1 (#823)", async () => {
+    // Guards the conflict-snapshot half of the classify fix: localBefore must read
+    // knowledge_current (current version), not getRowById (the demoted v1 row), so
+    // the discarded edit recoverable from sync_conflicts.local_content is the real
+    // superseded content. Reverting that branch to getRowById makes this fail.
+    syncData.enableSync("basic");
+    const id = ltm.create({
+      projectPath: "/tmp/lore-sync-engine",
+      scope: "project",
+      category: "pattern",
+      title: "VC",
+      content: "v1",
+    });
+    await pushOnce(makeClient() as never); // remote synced at v1
+    ltm.update(id, { content: "local-v2" }); // append v2, UNPUSHED → pending local change
+    // A divergent remote edit on the same logical_id (remote is keyed by id=logical_id).
+    const remoteRow = tableRows("knowledge").find((r) => r.id === id) as Record<
+      string,
+      unknown
+    >;
+    remoteRow.content = "remote-v2";
+    remoteRow.content_hash = "remotehash-v2";
+    remoteRow.updated_at = new Date(9_000_000).toISOString();
+    const r = await pullOnce(makeClient() as never);
+    expect(r.conflicts).toBe(1);
+    expect(currentContent(id)).toBe("remote-v2"); // LWW: remote wins
+    const row = db()
+      .query("SELECT local_content FROM sync_conflicts WHERE row_id = ?")
+      .get(id) as { local_content: string };
+    expect(JSON.parse(row.local_content).content).toBe("local-v2"); // current v2, not v1
+  });
+
+  test("a physical delete of a non-v1 version propagates to the remote by logical_id (#823, Seer)", async () => {
+    // The DELETE capture trigger must record the logical_id, not the version id —
+    // otherwise a delete of a version whose id ≠ logical_id targets a remote row
+    // that doesn't exist (remote is keyed by logical_id) and silently no-ops.
+    syncData.enableSync("basic");
+    const id = ltm.create({
+      projectPath: "/tmp/lore-sync-engine",
+      scope: "project",
+      category: "pattern",
+      title: "PD",
+      content: "v1",
+    });
+    ltm.update(id, { content: "v2" }); // current version's id is a fresh uuid ≠ id
+    const currentId = (
+      db()
+        .query(
+          "SELECT id FROM knowledge_current WHERE COALESCE(logical_id, id) = ?",
+        )
+        .get(id) as { id: string }
+    ).id;
+    expect(currentId).not.toBe(id);
+    await pushOnce(makeClient() as never); // remote row keyed by logical_id (= id)
+    // Physically delete the current version by its (non-logical) id.
+    db().query("DELETE FROM knowledge WHERE id = ?").run(currentId);
+    await pushOnce(makeClient() as never);
+    const remote = tableRows("knowledge").find((r) => r.id === id) as
+      | Record<string, unknown>
+      | undefined;
+    expect(remote?.is_deleted).toBe(true); // delete propagated via logical_id
+  });
+
+  test("a versioned entry deleted while sync is OFF tombstones on re-enable (#823)", async () => {
+    // reconcile() must tombstone by knowledge_current liveness, not physical-row
+    // existence — a deleted entry keeps its demoted/death-cert version rows, so an
+    // id=logical_id existence check would never reconcile a delete made while OFF.
+    syncData.enableSync("basic");
+    const id = ltm.create({
+      projectPath: "/tmp/lore-sync-engine",
+      scope: "project",
+      category: "pattern",
+      title: "DW",
+      content: "v1",
+    });
+    ltm.update(id, { content: "v2" }); // versioned
+    await pushOnce(makeClient() as never); // remote live
+    expect(
+      (
+        tableRows("knowledge").find((r) => r.id === id) as Record<
+          string,
+          unknown
+        >
+      )?.is_deleted,
+    ).toBeFalsy();
+    syncData.disableSync();
+    ltm.remove(id); // death-cert while OFF → capture trigger doesn't fire
+    syncData.enableSync("basic"); // reconcile enqueues the missed delete
+    await pushOnce(makeClient() as never);
+    expect(
+      (
+        tableRows("knowledge").find((r) => r.id === id) as Record<
+          string,
+          unknown
+        >
+      )?.is_deleted,
+    ).toBe(true);
+  });
+
+  test("physically deleting a SUPERSEDED version of a live entry does NOT delete the remote (#823, sub-PR 4 guard)", async () => {
+    // A physical delete of a non-current version fires op=delete keyed by logical_id.
+    // The push delete branch must re-validate liveness: the entry still has a live
+    // current version, so this is NOT a deletion — re-push current, don't tombstone.
+    syncData.enableSync("basic");
+    const id = ltm.create({
+      projectPath: "/tmp/lore-sync-engine",
+      scope: "project",
+      category: "pattern",
+      title: "SV",
+      content: "v1",
+    });
+    ltm.update(id, { content: "v2" }); // v2 current; v1 (id=id) demoted
+    await pushOnce(makeClient() as never); // remote live, content v2
+    // Physically delete only the SUPERSEDED v1 row — the entry lives on at v2.
+    db().query("DELETE FROM knowledge WHERE id = ? AND is_current = 0").run(id);
+    await pushOnce(makeClient() as never);
+    const remote = tableRows("knowledge").find((r) => r.id === id) as
+      | Record<string, unknown>
+      | undefined;
+    expect(remote?.is_deleted).toBeFalsy(); // still live → NOT deleted
+    expect(remote?.content).toBe("v2"); // current content retained
   });
 });
 

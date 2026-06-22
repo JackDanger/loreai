@@ -16,6 +16,7 @@
  *    (prevents push<->pull echo).
  */
 import { createHash } from "node:crypto";
+import { uuidv7 } from "uuidv7";
 import {
   db,
   deleteTeamConfig,
@@ -434,6 +435,28 @@ export function hasPendingChange(
   return row != null;
 }
 
+/**
+ * Knowledge-aware pending check (A2, #823): the remote keys knowledge by
+ * `logical_id`, but the outbox holds per-VERSION row ids — so resolve every
+ * unpushed knowledge outbox row to its logical_id. Without this, the pull path
+ * would miss an unpushed local edit to a versioned entry (its outbox id ≠
+ * logical_id) and silently let a remote change win without logging the conflict.
+ */
+export function hasPendingKnowledgeChange(
+  logicalId: string,
+  sinceSeq: number,
+): boolean {
+  const row = db()
+    .query(
+      `SELECT 1 FROM sync_outbox o
+         JOIN knowledge k ON k.id = o.row_id
+        WHERE o.table_name = 'knowledge' AND o.seq > ?
+          AND COALESCE(k.logical_id, k.id) = ? LIMIT 1`,
+    )
+    .get(sinceSeq, logicalId);
+  return row != null;
+}
+
 /** True when the outbox has at least one entry for `table`. */
 export function hasOutboxEntries(table: string): boolean {
   return (
@@ -503,6 +526,41 @@ export function seedOutbox(tier: SyncTier = "basic"): void {
       // (via the prune floor) permanently disabling outbox pruning for ALL tables.
       if (m.pullOnly) continue;
       const pushCursor = Number(getKV(`sync.push.${m.table}`) ?? "0");
+
+      // Knowledge is remote-keyed by logical_id (A2 sub-PR 3, #823): seed ONE entry
+      // per CURRENT live logical entry — NOT every physical version — keyed + hashed
+      // by logical_id to match the push plan + sync_state. Iterating physical rows
+      // and checking sync_state by version id would miss every v2+ entry (sync_state
+      // is keyed by logical_id) and re-enqueue it (outbox bloat). Deleted entries
+      // (no live current) are NOT seeded here — reconcile's tombstone pass emits the
+      // delete (its liveness check is also knowledge_current-based).
+      if (m.table === "knowledge") {
+        const latestForLogical = db().query(
+          `SELECT o.op FROM sync_outbox o JOIN knowledge k ON k.id = o.row_id
+            WHERE o.table_name = 'knowledge' AND o.seq > ?
+              AND COALESCE(k.logical_id, k.id) = ?
+            ORDER BY o.seq DESC LIMIT 1`,
+        );
+        const lids = db()
+          .query(
+            "SELECT DISTINCT COALESCE(logical_id, id) AS lid FROM knowledge_current",
+          )
+          .all() as { lid: string }[];
+        for (const { lid } of lids) {
+          const pending =
+            (latestForLogical.get(pushCursor, lid) as { op: string } | null)
+              ?.op ?? null;
+          if (pending === "upsert") continue; // already queued
+          if (pending === null) {
+            const synced = getSyncState("knowledge", lid)?.content_hash ?? null;
+            const row = currentKnowledgeRow(lid);
+            if (row && contentHash("knowledge", row) === synced) continue;
+          }
+          enqueue.run("knowledge", lid, now);
+        }
+        continue;
+      }
+
       // Resolve the synced columns ONCE per table (one PRAGMA table_info) — not
       // per row, which is what `contentHash` would do (an N+1 on large tables).
       const cols = columns(m.table);
@@ -551,14 +609,21 @@ export function reconcile(tier: SyncTier = "basic"): void {
     // Pull-only tables are never pushed (see seedOutbox) — also skip the
     // delete-tombstone reconciliation so no `profiles` outbox entry is created.
     if (m.pullOnly) continue;
-    const idExpr = rowIdExpr(m);
+    // Knowledge is keyed by logical_id and append-only: "live" means a CURRENT live
+    // version exists (knowledge_current), NOT merely a physical row — a deleted
+    // entry keeps its demoted/death-cert version rows, so an `id = logical_id`
+    // existence check would never tombstone a delete made while sync was OFF (#823).
+    const livenessNotExists =
+      m.table === "knowledge"
+        ? "NOT EXISTS (SELECT 1 FROM knowledge_current t WHERE COALESCE(t.logical_id, t.id) = s.row_id)"
+        : `NOT EXISTS (SELECT 1 FROM ${m.table} t WHERE ${rowIdExpr(m)} = s.row_id)`;
     db()
       .query(
         `INSERT INTO sync_outbox (table_name, row_id, op, changed_at)
          SELECT s.table_name, s.row_id, 'delete', ?
            FROM sync_state s
           WHERE s.table_name = ?
-            AND NOT EXISTS (SELECT 1 FROM ${m.table} t WHERE ${idExpr} = s.row_id)
+            AND ${livenessNotExists}
             AND COALESCE(
               (SELECT o.op FROM sync_outbox o
                 WHERE o.table_name = s.table_name AND o.row_id = s.row_id
@@ -656,21 +721,13 @@ export function applyRemoteUpsert(
       ? `DO UPDATE SET ${nonPk.map((c) => `${c}=excluded.${c}`).join(", ")}`
       : "DO NOTHING";
   const sql = `INSERT INTO ${table} (${cols.join(", ")}) VALUES (${placeholders}) ON CONFLICT(${conflict}) ${onConflict}`;
+  // NOTE: knowledge is NOT applied here — it routes through applyRemoteKnowledge
+  // (append-only, version-aware). This generic upsert serves the entity graph
+  // (entities / aliases / relations / refs), which are not versioned.
   withApplying(() => {
     db()
       .query(sql)
       .run(...cols.map((c) => row[c] as never));
-    // A2 (#823): the remote knowledge table has no logical_id column yet (sub-PR
-    // 3 adds it), so a pulled row lands with logical_id = NULL. Backfill it to id
-    // (the v1 identity) so the local cross-reference model (refs / getByLogical)
-    // resolves the row. Idempotent: only touches NULLs, never an existing value.
-    if (table === "knowledge" && !("logical_id" in row)) {
-      db()
-        .query(
-          "UPDATE knowledge SET logical_id = id WHERE id = ? AND logical_id IS NULL",
-        )
-        .run(row.id as never);
-    }
   });
 }
 
@@ -685,24 +742,198 @@ export function applyRemoteDelete(table: string, rowId: string): void {
   );
 }
 
+/** Insert one knowledge version row from a synced-column source `src`. */
+function insertKnowledgeVersion(
+  src: Record<string, unknown>,
+  syncCols: string[],
+  ident: { id: string; logicalId: string; version: number; isDeleted: 0 | 1 },
+): void {
+  const vals: Record<string, unknown> = {};
+  for (const c of syncCols) vals[c] = src[c];
+  vals.id = ident.id;
+  vals.logical_id = ident.logicalId;
+  vals.version = ident.version;
+  vals.is_current = 1;
+  vals.is_deleted = ident.isDeleted;
+  const cols = Object.keys(vals);
+  db()
+    .query(
+      `INSERT INTO knowledge (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`,
+    )
+    .run(...cols.map((c) => vals[c] as never));
+}
+
 /**
- * Map a knowledge outbox row to its remote sync op under the append-only model
- * (A2, #823). The remote mirrors only the CURRENT LIVE version: a superseded
- * (is_current=0) or soft-deleted (is_deleted=1) version becomes a remote
- * soft-delete — this removes stale/redacted content from the remote and
- * propagates deletions (remove() no longer emits a physical-delete outbox op).
- * A current live version is upserted. Returns "skip" if the row is gone.
- *
- * NOTE: this keeps the remote a correct CURRENT-only mirror keyed by the current
- * version id. Full cross-device id↔logical_id convergence (so refs resolve the
- * same entry on every device) is completed in sub-PR 3.
+ * Apply a pulled knowledge row (keyed by `logical_id` = `row.id`) into the local
+ * APPEND-ONLY model (A2, #823). The remote is a current-only mirror, so a content
+ * change is "the same concern, new value" arriving from another device → append a
+ * new current version (mirrors a local update()); a metadata-only change converges
+ * in place; a brand-new entry inserts v1. Idempotency: re-pulling our own pushed
+ * content matches the current version → no new version. Runs under apply-
+ * suppression (no re-push) and a transaction (single-current invariant: demote
+ * before insert). NOTE: superseded/death-cert version history stays LOCAL — only
+ * current content converges across devices.
  */
-export function knowledgeSyncOp(rowId: string): "upsert" | "delete" | "skip" {
-  const v = db()
-    .query("SELECT is_current, is_deleted FROM knowledge WHERE id = ?")
-    .get(rowId) as { is_current: number; is_deleted: number } | undefined;
-  if (!v) return "skip";
-  return v.is_current === 0 || v.is_deleted === 1 ? "delete" : "upsert";
+export function applyRemoteKnowledge(row: Record<string, unknown>): void {
+  const logicalId = String(row.id);
+  const syncCols = columns("knowledge").filter(
+    (c) => !PAYLOAD_EXCLUDE.has(c) && c in row,
+  );
+  withApplying(() =>
+    withTransaction(() => {
+      const agg = db()
+        .query(
+          "SELECT MAX(version) AS maxV, COUNT(*) AS n FROM knowledge WHERE COALESCE(logical_id, id) = ?",
+        )
+        .get(logicalId) as { maxV: number | null; n: number };
+      const cur = db()
+        .query(
+          "SELECT content FROM knowledge_current WHERE COALESCE(logical_id, id) = ?",
+        )
+        .get(logicalId) as { content: string } | undefined;
+
+      if (agg.n === 0) {
+        // Brand-new entry: v1 carries the remote id AS the logical_id (id == logical_id).
+        insertKnowledgeVersion(row, syncCols, {
+          id: logicalId,
+          logicalId,
+          version: 1,
+          isDeleted: 0,
+        });
+        return;
+      }
+      if (cur && cur.content === row.content) {
+        // Content already converged — update the other (hashed) synced fields on the
+        // current version in place so the local hash matches the remote (no re-push),
+        // without minting a new version. content/identity/version cols are excluded.
+        const skip = new Set([
+          "id",
+          "logical_id",
+          "version",
+          "is_current",
+          "is_deleted",
+          "content",
+        ]);
+        const setCols = syncCols.filter((c) => !skip.has(c));
+        if (setCols.length > 0) {
+          db()
+            .query(
+              `UPDATE knowledge SET ${setCols.map((c) => `${c} = ?`).join(", ")} WHERE COALESCE(logical_id, id) = ? AND is_current = 1`,
+            )
+            .run(...setCols.map((c) => row[c] as never), logicalId);
+        }
+        return;
+      }
+      // Content differs (or no live current → revive) → append a new current version.
+      db()
+        .query(
+          "UPDATE knowledge SET is_current = 0 WHERE COALESCE(logical_id, id) = ? AND is_current = 1",
+        )
+        .run(logicalId);
+      insertKnowledgeVersion(row, syncCols, {
+        id: uuidv7(),
+        logicalId,
+        version: (agg.maxV ?? 0) + 1,
+        isDeleted: 0,
+      });
+    }),
+  );
+}
+
+/**
+ * Apply a pulled knowledge DELETE (remote soft-delete of `logicalId`) into the
+ * local append-only model: append a death-certificate version (preserving the
+ * current content) if a live current exists; otherwise a no-op. Apply-suppressed
+ * + transactional (single-current invariant).
+ */
+export function applyRemoteKnowledgeDelete(logicalId: string): void {
+  withApplying(() =>
+    withTransaction(() => {
+      const cur = db()
+        .query(
+          "SELECT * FROM knowledge_current WHERE COALESCE(logical_id, id) = ?",
+        )
+        .get(logicalId) as Record<string, unknown> | undefined;
+      if (!cur) return; // already no live current — nothing to delete
+      const maxV = (
+        db()
+          .query(
+            "SELECT MAX(version) AS m FROM knowledge WHERE COALESCE(logical_id, id) = ?",
+          )
+          .get(logicalId) as { m: number }
+      ).m;
+      db()
+        .query(
+          "UPDATE knowledge SET is_current = 0 WHERE COALESCE(logical_id, id) = ? AND is_current = 1",
+        )
+        .run(logicalId);
+      const syncCols = columns("knowledge").filter(
+        (c) => !PAYLOAD_EXCLUDE.has(c) && c in cur,
+      );
+      insertKnowledgeVersion(cur, syncCols, {
+        id: uuidv7(),
+        logicalId,
+        version: maxV + 1,
+        isDeleted: 1,
+      });
+    }),
+  );
+}
+
+export type KnowledgePushPlan =
+  | { op: "skip" }
+  | { op: "delete"; logicalId: string }
+  | { op: "upsert"; logicalId: string; row: Record<string, unknown> };
+
+/**
+ * Plan the remote push for a knowledge outbox row under the append-only model
+ * (A2, #823). The remote is a CURRENT-only mirror keyed by `logical_id` — exactly
+ * ONE row per logical entry:
+ *   - live current version → upsert the current content under `id = logical_id`.
+ *     Every version's outbox row for the same entry coalesces to this single
+ *     upsert; the content_hash dedup makes the redundant ones no-ops.
+ *   - no live current (every version superseded or a death-cert) → soft-delete
+ *     `id = logical_id` (propagates deletions + removes stale/redacted content).
+ *   - logical entry physically gone → skip.
+ *
+ * The returned `row` carries the synced columns of the CURRENT version with `id`
+ * overridden to `logical_id` (the remote row key). This coalesces all versions to
+ * one remote row and converges `id`↔`logical_id` across devices.
+ */
+/**
+ * The CURRENT live version's synced columns for a logical entry, re-keyed
+ * `id = logical_id` — i.e. the exact remote-row shape that {@link knowledgePushPlan}
+ * pushes (and {@link contentHash} hashes). Null if the entry has no live current.
+ * Use this (not getRowById, which addresses the physical/demoted row) whenever the
+ * remote is keyed by logical_id — push, conflict classification, conflict snapshot.
+ * COALESCE(logical_id, id): production always sets logical_id; be robust to a
+ * legacy/unmigrated NULL (a v1 row IS its own logical entity).
+ */
+export function currentKnowledgeRow(
+  logicalId: string,
+): Record<string, unknown> | null {
+  const cols = columns("knowledge").filter((c) => !PAYLOAD_EXCLUDE.has(c));
+  const row = db()
+    .query(
+      `SELECT ${cols.join(", ")} FROM knowledge_current WHERE COALESCE(logical_id, id) = ?`,
+    )
+    .get(logicalId) as Record<string, unknown> | undefined;
+  if (!row) return null;
+  row.id = logicalId; // re-key on the stable logical_id (the remote row key)
+  return row;
+}
+
+export function knowledgePushPlan(outboxRowId: string): KnowledgePushPlan {
+  const lid = db()
+    .query(
+      "SELECT COALESCE(logical_id, id) AS logical_id FROM knowledge WHERE id = ?",
+    )
+    .get(outboxRowId) as { logical_id: string } | undefined;
+  if (!lid) return { op: "skip" }; // physical row gone (not expected post-flip)
+  const logicalId = lid.logical_id;
+  const row = currentKnowledgeRow(logicalId);
+  if (!row) return { op: "delete", logicalId }; // no live current → soft-delete
+  return { op: "upsert", logicalId, row };
 }
 
 /** Rebuild an external-content FTS5 index after a batch of pulled changes. */
@@ -751,7 +982,15 @@ export function classifyRemoteRow(
   remoteHash: string | null,
   opts: { pendingLocalChange?: boolean } = {},
 ): RemoteClass {
-  const local = getRowById(table, rowId);
+  // Knowledge is append-only and remote-keyed by logical_id: the local CURRENT
+  // content lives in knowledge_current (a fresh version row), NOT the physical row
+  // addressed by getRowById(id=logical_id) — which is the demoted v1 after any
+  // update. Reading the demoted row here mis-hashes every versioned entry, turning
+  // clean fast-forwards/echoes into false conflicts (Seer + review, #823).
+  const local =
+    table === "knowledge"
+      ? currentKnowledgeRow(rowId)
+      : getRowById(table, rowId);
   const localHash = local ? contentHash(table, local) : null;
   if (remoteHash !== null && localHash === remoteHash) return "skip";
 
