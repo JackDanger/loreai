@@ -21,26 +21,30 @@ import {
 } from "../src/embedding";
 
 describe("cosineSimilarity", () => {
-  test("identical vectors return 1.0", () => {
-    const a = new Float32Array([1, 2, 3]);
+  test("identical unit vectors return 1.0", () => {
+    const a = new Float32Array([1, 0, 0]);
     expect(cosineSimilarity(a, a)).toBeCloseTo(1.0, 5);
   });
 
-  test("opposite vectors return -1.0", () => {
+  test("opposite unit vectors return -1.0", () => {
     const a = new Float32Array([1, 0, 0]);
     const b = new Float32Array([-1, 0, 0]);
     expect(cosineSimilarity(a, b)).toBeCloseTo(-1.0, 5);
   });
 
-  test("orthogonal vectors return 0.0", () => {
+  test("orthogonal unit vectors return 0.0", () => {
     const a = new Float32Array([1, 0, 0]);
     const b = new Float32Array([0, 1, 0]);
     expect(cosineSimilarity(a, b)).toBeCloseTo(0.0, 5);
   });
 
-  test("similar vectors return high positive value", () => {
-    const a = new Float32Array([1, 0.1, 0]);
-    const b = new Float32Array([0.9, 0.2, 0]);
+  test("similar unit vectors return high positive value", () => {
+    const norm = (v: number[]) => {
+      const n = Math.sqrt(v.reduce((s, x) => s + x * x, 0));
+      return new Float32Array(v.map((x) => x / n));
+    };
+    const a = norm([1, 0.1, 0]);
+    const b = norm([0.9, 0.2, 0]);
     const sim = cosineSimilarity(a, b);
     expect(sim).toBeGreaterThan(0.9);
     expect(sim).toBeLessThanOrEqual(1.0);
@@ -48,7 +52,7 @@ describe("cosineSimilarity", () => {
 
   test("zero vector returns 0", () => {
     const a = new Float32Array([0, 0, 0]);
-    const b = new Float32Array([1, 2, 3]);
+    const b = new Float32Array([1, 0, 0]);
     expect(cosineSimilarity(a, b)).toBe(0);
   });
 
@@ -282,7 +286,12 @@ describe("vectorSearch", () => {
 
     const vecA = new Float32Array([1, 0, 0]);
     const vecB = new Float32Array([0, 1, 0]);
-    const vecC = new Float32Array([0.9, 0.1, 0]);
+    // L2-normalize vecC to match production vectors (the embedding worker
+    // always normalizes). Un-normalized vectors would give different scores
+    // from dotProductNormalized vs cosineSimilarity.
+    const rawC = [0.9, 0.1, 0];
+    const normC = Math.sqrt(rawC[0] ** 2 + rawC[1] ** 2 + rawC[2] ** 2);
+    const vecC = new Float32Array(rawC.map((v) => v / normC));
 
     db()
       .query(

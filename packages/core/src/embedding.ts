@@ -1192,23 +1192,48 @@ export async function embed(
 // ---------------------------------------------------------------------------
 
 /**
- * Cosine similarity between two Float32Array vectors.
+ * Cosine similarity between two L2-normalized Float32Array vectors.
+ * All vectors in the system (local ONNX, Voyage, OpenAI) are L2-normalized
+ * at embedding time, so dot product === cosine similarity. This skips the
+ * per-vector norm accumulations and sqrt calls (~2× faster).
  * Returns -1.0 to 1.0 where 1.0 = identical direction.
- * Returns 0 if either vector is zero-length.
  */
 export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
-  const len = Math.min(a.length, b.length);
+  const len = a.length;
   let dot = 0;
-  let normA = 0;
-  let normB = 0;
   for (let i = 0; i < len; i++) {
     dot += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
   }
-  const denom = Math.sqrt(normA) * Math.sqrt(normB);
-  if (denom === 0) return 0;
-  return dot / denom;
+  return dot;
+}
+
+// ---------------------------------------------------------------------------
+// Top-k selection (avoids full sort of the scored array)
+// ---------------------------------------------------------------------------
+
+/**
+ * Maintain a bounded descending-sorted array of the top k items by score.
+ * For small k (10–50) and moderate n (200–500), the O(n*k) insert is faster
+ * than O(n log n) sort due to lower constant factors and no allocation.
+ */
+function topKInsert<T extends { similarity: number }>(
+  topK: T[],
+  item: T,
+  k: number,
+): void {
+  const score = item.similarity;
+  const len = topK.length;
+  if (len >= k && score <= topK[len - 1].similarity) return;
+  // Binary search for insert position in the descending-sorted array
+  let lo = 0;
+  let hi = len;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (topK[mid].similarity > score) lo = mid + 1;
+    else hi = mid;
+  }
+  topK.splice(lo, 0, item);
+  if (topK.length > k) topK.length = k;
 }
 
 // ---------------------------------------------------------------------------
@@ -1235,7 +1260,9 @@ type VectorHit = { id: string; similarity: number };
 /**
  * Search all knowledge entries with embeddings by cosine similarity.
  * Returns top-k entries sorted by similarity descending.
- * Pure brute-force — fine for <100 entries (microseconds).
+ *
+ * Uses dot-product (vectors are L2-normalized) and bounded top-k insertion
+ * to avoid a full O(n log n) sort.
  *
  * @param excludeCategories  Optional category names to exclude from results.
  *   Useful when preferences are injected in a separate system block and
@@ -1257,21 +1284,18 @@ export function vectorSearch(
     .query(sql)
     .all(...params) as Array<{ id: string; embedding: Buffer }>;
 
-  const scored: VectorHit[] = [];
+  const topK: VectorHit[] = [];
   for (const row of rows) {
     const vec = fromBlob(row.embedding);
     const sim = cosineSimilarity(queryEmbedding, vec);
-    scored.push({ id: row.id, similarity: sim });
+    topKInsert(topK, { id: row.id, similarity: sim }, limit);
   }
-
-  scored.sort((a, b) => b.similarity - a.similarity);
-  return scored.slice(0, limit);
+  return topK;
 }
 
 /**
  * Search all entities with embeddings by cosine similarity.
  * Returns top-k entities sorted by similarity descending.
- * Pure brute-force — fine for the typical entity-registry size.
  */
 export function vectorSearchEntities(
   queryEmbedding: Float32Array,
@@ -1281,15 +1305,13 @@ export function vectorSearchEntities(
     .query("SELECT id, embedding FROM entities WHERE embedding IS NOT NULL")
     .all() as Array<{ id: string; embedding: Buffer }>;
 
-  const scored: VectorHit[] = [];
+  const topK: VectorHit[] = [];
   for (const row of rows) {
     const vec = fromBlob(row.embedding);
     const sim = cosineSimilarity(queryEmbedding, vec);
-    scored.push({ id: row.id, similarity: sim });
+    topKInsert(topK, { id: row.id, similarity: sim }, limit);
   }
-
-  scored.sort((a, b) => b.similarity - a.similarity);
-  return scored.slice(0, limit);
+  return topK;
 }
 
 // ---------------------------------------------------------------------------
@@ -1299,7 +1321,6 @@ export function vectorSearchEntities(
 /**
  * Search non-archived distillations with embeddings by cosine similarity.
  * Returns top-k entries sorted by similarity descending.
- * Pure brute-force — fine for ~50 entries.
  */
 export function vectorSearchDistillations(
   queryEmbedding: Float32Array,
@@ -1311,15 +1332,13 @@ export function vectorSearchDistillations(
     )
     .all() as Array<{ id: string; embedding: Buffer }>;
 
-  const scored: VectorHit[] = [];
+  const topK: VectorHit[] = [];
   for (const row of rows) {
     const vec = fromBlob(row.embedding);
     const sim = cosineSimilarity(queryEmbedding, vec);
-    scored.push({ id: row.id, similarity: sim });
+    topKInsert(topK, { id: row.id, similarity: sim }, limit);
   }
-
-  scored.sort((a, b) => b.similarity - a.similarity);
-  return scored.slice(0, limit);
+  return topK;
 }
 
 // ---------------------------------------------------------------------------
@@ -1362,15 +1381,17 @@ export function vectorSearchAllDistillations(
     embedding: Buffer;
   }>;
 
-  const scored: DistillationVectorHit[] = [];
+  const topK: DistillationVectorHit[] = [];
   for (const row of rows) {
     const vec = fromBlob(row.embedding);
     const sim = cosineSimilarity(queryEmbedding, vec);
-    scored.push({ id: row.id, session_id: row.session_id, similarity: sim });
+    topKInsert(
+      topK,
+      { id: row.id, session_id: row.session_id, similarity: sim },
+      limit,
+    );
   }
-
-  scored.sort((a, b) => b.similarity - a.similarity);
-  return scored.slice(0, limit);
+  return topK;
 }
 
 // ---------------------------------------------------------------------------
@@ -1512,15 +1533,13 @@ export function vectorSearchTemporal(
     .query(sql)
     .all(...params) as Array<{ id: string; embedding: Buffer }>;
 
-  const scored: VectorHit[] = [];
+  const topK: VectorHit[] = [];
   for (const row of rows) {
     const vec = fromBlob(row.embedding);
     const sim = cosineSimilarity(queryEmbedding, vec);
-    scored.push({ id: row.id, similarity: sim });
+    topKInsert(topK, { id: row.id, similarity: sim }, limit);
   }
-
-  scored.sort((a, b) => b.similarity - a.similarity);
-  return scored.slice(0, limit);
+  return topK;
 }
 
 // ---------------------------------------------------------------------------
