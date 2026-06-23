@@ -117,18 +117,31 @@ export function classifyToolError(_tool: string, error: string): string {
  * a verifier" (no signal), the safe default for a confidence-adjusting loop.
  */
 const VERIFIER_LEADING = new RegExp(
-  // optional leading prefixes that precede the real command
-  String.raw`^\s*(?:(?:sudo|time|npx|bunx)\s+|\w+=\S+\s+|env\s+)*` +
+  // Optional leading prefixes that precede the real command. The package-manager
+  // prefix (with an optional run/exec/dlx verb) lets the bare-runner branch fire
+  // on `pnpm exec biome`, `pnpm vitest`, `npx vitest`, etc. — while `pnpm install`
+  // / `pnpm add vitest` stay non-matches because the runner is not at the head of
+  // what remains after the prefix.
+  String.raw`^\s*(?:(?:sudo|time|npx|bunx)\s+|\w+=\S+\s+|env\s+|(?:npm|pnpm|yarn|bun)\s+(?:run\s+|exec\s+|dlx\s+)?)*` +
     "(?:" +
     [
-      // package-manager script runners
-      String.raw`(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|build|typecheck|type-check|lint|tsc|check)\b`,
+      // package-manager verify scripts: pnpm test, yarn coverage, npm run e2e, ...
+      String.raw`(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|build|typecheck|type-check|lint|tsc|check|verify|validate|e2e|spec|coverage)\b`,
+      // `ci` ONLY with an explicit `run` — bare `npm ci` is a clean dependency
+      // INSTALL (fails on network/registry/lockfile, unrelated to code), so it
+      // must never be counted as a verifier.
+      String.raw`(?:npm|pnpm|yarn|bun)\s+run\s+ci\b`,
       // direct test runners
-      String.raw`(?:vitest|jest|mocha|ava|pytest|rspec|phpunit|gotestsum)\b`,
-      String.raw`(?:go|cargo|gradle|mvn|dotnet)\s+test\b`,
+      String.raw`(?:vitest|jest|mocha|ava|pytest|rspec|phpunit|gotestsum|tox|nox|ctest|pre-commit)\b`,
+      // language / build toolchains with a verify subcommand
+      String.raw`(?:go|cargo|gradle|mvn|dotnet|swift)\s+(?:test|build|check)\b`,
+      String.raw`deno\s+(?:test|check|lint)\b`,
+      // task runners invoked with a verify target (NOT `make run` / bare `make`)
+      String.raw`(?:make|just|task)\s+(?:test|build|lint|check|typecheck|type-check|ci|verify|validate|e2e|spec|coverage)\b`,
+      String.raw`rake\s+(?:test|spec)\b`,
+      String.raw`bazel\s+(?:test|build)\b`,
       // typecheck / compile
       String.raw`(?:tsc|tsgo)\b`,
-      String.raw`(?:go|cargo)\s+build\b`,
       // linters / formatters used as gates
       String.raw`(?:eslint|biome|ruff|flake8|mypy|clippy|golangci-lint)\b`,
     ].join("|") +
@@ -162,7 +175,12 @@ export function extractCommand(input: unknown): string | null {
 export function isVerifierCall(input: unknown): boolean {
   const cmd = extractCommand(input);
   if (!cmd) return false;
+  // Bound the work before regex (mirrors classifyToolError). A verifier
+  // invocation leads a command segment, so it lives near the start; the cap is
+  // defense-in-depth against a pathological multi-KB command on this
+  // request-adjacent path. Truncation can only drop a match (safe direction).
   return cmd
+    .slice(0, 4000)
     .split(/&&|\|\||[;\n|]/)
     .some((segment) => VERIFIER_LEADING.test(segment));
 }
