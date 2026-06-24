@@ -286,7 +286,7 @@ async function cmdShow(
       console.log(`Created:     ${formatDate(entry.created_at)}`);
       console.log(`Updated:     ${formatDate(entry.updated_at)}`);
       if (entry.metadata) {
-        console.log(`Metadata:    ${entry.metadata}`);
+        console.log(`Metadata:    ${JSON.stringify(entry.metadata)}`);
       }
       console.log(`\nContent:\n${entry.content}`);
       break;
@@ -1548,7 +1548,9 @@ async function cmdShowRemote(
         source_session: string | null;
         created_at: number;
         updated_at: number;
-        metadata: string | null;
+        // The API serializes ltm.get()'s hydrated entry, so metadata arrives as
+        // a parsed object (KnowledgeMetadata), not a JSON string (#627 Phase 1).
+        metadata: Record<string, unknown> | null;
       }>(remote, `/api/v1/knowledge/${encodeURIComponent(rawId)}`);
       if (asJson) {
         console.log(JSON.stringify(entry, null, 2));
@@ -1563,7 +1565,8 @@ async function cmdShowRemote(
       console.log(`Session:     ${entry.source_session ?? "(none)"}`);
       console.log(`Created:     ${formatDate(entry.created_at)}`);
       console.log(`Updated:     ${formatDate(entry.updated_at)}`);
-      if (entry.metadata) console.log(`Metadata:    ${entry.metadata}`);
+      if (entry.metadata)
+        console.log(`Metadata:    ${JSON.stringify(entry.metadata)}`);
       console.log(`\nContent:\n${entry.content}`);
       break;
     }
