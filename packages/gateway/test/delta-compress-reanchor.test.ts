@@ -634,3 +634,208 @@ describe("steady-layer-1 insertAt drift — nudge is persisted", () => {
     ).toBe(deltaIdx2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Bug 2 follow-up — multi-block re-anchor must not reorder same-insertAt blocks
+// ---------------------------------------------------------------------------
+// Seer flagged (PR #976): the Bug 2 per-block re-anchor computes
+// safeDeltaInsertIndex against the MUTATING `out` array. When two blocks share
+// a stored insertAt and a nudge fires, the first block's splice shields the
+// second from the tool_use, so they persist DIVERGENT insertAt values. That
+// changes the sort tie-break on later turns, flipping the blocks' replay order
+// (cache bust). reanchorExistingDelta deliberately puts all blocks at the SAME
+// insertAt, so this is reachable in production.
+describe("multi-block re-anchor keeps same-insertAt blocks in stable order", () => {
+  test("two blocks sharing an insertAt replay in a STABLE order across turns", () => {
+    const sessionID = `delta-multiblk-${Date.now()}-${Math.random()}`;
+    const projectID = ensureProject(
+      `/tmp/lore-delta-multiblk-${Date.now()}-${Math.random()}`,
+    );
+
+    // Two append-only blocks, both stored at insertAt=2 (the state
+    // reanchorExistingDelta produces). seq is allocated MAX+1, so A=seq0,
+    // B=seq1. Ascending-seq order (A before B) must hold every turn.
+    appendSessionPromptDelta({
+      sessionID,
+      projectID,
+      selector: JSON.stringify({ target: "messages", insertAt: 2 }),
+      content: JSON.stringify({
+        role: "user",
+        content: [{ type: "text", text: "BLOCK-A" }],
+      }),
+    });
+    appendSessionPromptDelta({
+      sessionID,
+      projectID,
+      selector: JSON.stringify({ target: "messages", insertAt: 2 }),
+      content: JSON.stringify({
+        role: "user",
+        content: [{ type: "text", text: "BLOCK-B" }],
+      }),
+    });
+
+    // Layout where stored insertAt=2 lands right after assistant(tool_use) at
+    // index 1 → safeDeltaInsertIndex nudges before the assistant.
+    const layout: GatewayMessage[] = [
+      user(text("u0")),
+      assistant(toolUse("X")),
+      user(toolResult("X")),
+      user(text("u3")),
+    ];
+
+    /** Returns [idxA, idxB] of the two delta blocks in the applied output. */
+    const orderOf = (out: GatewayMessage[]): [number, number] => {
+      const idxA = out.findIndex((m) =>
+        m.content.some((b) => b.type === "text" && b.text === "BLOCK-A"),
+      );
+      const idxB = out.findIndex((m) =>
+        m.content.some((b) => b.type === "text" && b.text === "BLOCK-B"),
+      );
+      return [idxA, idxB];
+    };
+
+    // Replay the SAME layout three turns. The relative order of A vs B must be
+    // identical every turn (cache stability). Pre-fix the order flips
+    // (B,A → B,A → A,B) as divergent persisted insertAt values reshuffle the
+    // sort tie-break.
+    const orders: Array<"A<B" | "B<A"> = [];
+    for (let turn = 0; turn < 3; turn++) {
+      const out = applySessionPromptDeltas(layout, sessionID);
+      removeOrphanedToolResults(out);
+      assertNoOrphanedTools(out);
+      const [idxA, idxB] = orderOf(out);
+      expect(idxA).toBeGreaterThanOrEqual(0);
+      expect(idxB).toBeGreaterThanOrEqual(0);
+      orders.push(idxA < idxB ? "A<B" : "B<A");
+    }
+
+    // All three turns must agree on the order.
+    expect(
+      new Set(orders).size,
+      `order flipped across turns: ${orders.join(",")}`,
+    ).toBe(1);
+    // And it must be the ascending-seq order (A before B).
+    expect(orders[0]).toBe("A<B");
+  });
+});
+
+// Additional coverage (adversarial review of PR #982): lock the splice-basis
+// change for DISTINCT safe positions, 3+ same-insertAt blocks, and a mix.
+describe("multi-block re-anchor — placement across distinct + shared positions", () => {
+  function seedBlock(
+    sessionID: string,
+    projectID: string,
+    insertAt: number,
+    label: string,
+  ) {
+    appendSessionPromptDelta({
+      sessionID,
+      projectID,
+      selector: JSON.stringify({ target: "messages", insertAt }),
+      content: JSON.stringify({
+        role: "user",
+        content: [{ type: "text", text: label }],
+      }),
+    });
+  }
+
+  /** Map a label to its index in the applied output (-1 if absent). */
+  const idxOf = (out: GatewayMessage[], label: string) =>
+    out.findIndex((m) =>
+      m.content.some((b) => b.type === "text" && b.text === label),
+    );
+
+  test("DISTINCT safe positions: each block lands between its neighbors (no tool_use)", () => {
+    const sessionID = `delta-distinct-${Date.now()}-${Math.random()}`;
+    const projectID = ensureProject(
+      `/tmp/lore-delta-distinct-${Date.now()}-${Math.random()}`,
+    );
+    // No tool_use → no nudge; safe == stored insertAt for each block.
+    seedBlock(sessionID, projectID, 2, "AA"); // seq0
+    seedBlock(sessionID, projectID, 5, "BB"); // seq1
+    seedBlock(sessionID, projectID, 8, "CC"); // seq2
+
+    const layout: GatewayMessage[] = Array.from({ length: 9 }, (_, i) =>
+      user(text(`m${i}`)),
+    );
+    const out = applySessionPromptDeltas(layout, sessionID);
+
+    // Each delta sits immediately before the original message that was at its
+    // stored insertAt: AA before m2, BB before m5, CC before m8.
+    expect(out[idxOf(out, "AA") + 1]?.content[0]).toMatchObject({ text: "m2" });
+    expect(out[idxOf(out, "BB") + 1]?.content[0]).toMatchObject({ text: "m5" });
+    expect(out[idxOf(out, "CC") + 1]?.content[0]).toMatchObject({ text: "m8" });
+    // Ascending position order AA < BB < CC.
+    expect(idxOf(out, "AA")).toBeLessThan(idxOf(out, "BB"));
+    expect(idxOf(out, "BB")).toBeLessThan(idxOf(out, "CC"));
+    // Stable across a second replay (byte-identical positions).
+    const out2 = applySessionPromptDeltas(layout, sessionID);
+    expect(
+      out2.map((m) => m.content[0]?.type === "text" && m.content[0].text),
+    ).toEqual(
+      out.map((m) => m.content[0]?.type === "text" && m.content[0].text),
+    );
+  });
+
+  test("THREE blocks at the same insertAt replay in ascending-seq order, stably", () => {
+    const sessionID = `delta-tri-${Date.now()}-${Math.random()}`;
+    const projectID = ensureProject(
+      `/tmp/lore-delta-tri-${Date.now()}-${Math.random()}`,
+    );
+    seedBlock(sessionID, projectID, 2, "P0"); // seq0
+    seedBlock(sessionID, projectID, 2, "P1"); // seq1
+    seedBlock(sessionID, projectID, 2, "P2"); // seq2
+
+    const layout: GatewayMessage[] = [
+      user(text("u0")),
+      assistant(toolUse("X")),
+      user(toolResult("X")),
+      user(text("u3")),
+    ];
+
+    const orderKey = (out: GatewayMessage[]) =>
+      [idxOf(out, "P0"), idxOf(out, "P1"), idxOf(out, "P2")].join(",");
+
+    const keys: string[] = [];
+    for (let t = 0; t < 3; t++) {
+      const out = applySessionPromptDeltas(layout, sessionID);
+      removeOrphanedToolResults(out);
+      assertNoOrphanedTools(out);
+      // Ascending seq: P0 before P1 before P2.
+      expect(idxOf(out, "P0")).toBeLessThan(idxOf(out, "P1"));
+      expect(idxOf(out, "P1")).toBeLessThan(idxOf(out, "P2"));
+      keys.push(orderKey(out));
+    }
+    expect(new Set(keys).size, `positions drifted: ${keys.join(" | ")}`).toBe(
+      1,
+    );
+  });
+
+  test("MIX of same + distinct insertAt interleaves correctly and stably", () => {
+    const sessionID = `delta-mix-${Date.now()}-${Math.random()}`;
+    const projectID = ensureProject(
+      `/tmp/lore-delta-mix-${Date.now()}-${Math.random()}`,
+    );
+    seedBlock(sessionID, projectID, 2, "M0"); // seq0, shares pos 2
+    seedBlock(sessionID, projectID, 2, "M1"); // seq1, shares pos 2
+    seedBlock(sessionID, projectID, 5, "M2"); // seq2, distinct pos 5
+
+    const layout: GatewayMessage[] = Array.from({ length: 6 }, (_, i) =>
+      user(text(`x${i}`)),
+    );
+
+    const snapshot = (out: GatewayMessage[]) =>
+      out
+        .map((m) => (m.content[0]?.type === "text" ? m.content[0].text : "?"))
+        .join(",");
+
+    const a = applySessionPromptDeltas(layout, sessionID);
+    // M0,M1 at pos 2 in ascending seq; M2 at pos 5.
+    expect(idxOf(a, "M0")).toBeLessThan(idxOf(a, "M1"));
+    expect(idxOf(a, "M1")).toBeLessThan(idxOf(a, "M2"));
+    expect(a[idxOf(a, "M2") + 1]?.content[0]).toMatchObject({ text: "x5" });
+    // Stable on replay.
+    const b = applySessionPromptDeltas(layout, sessionID);
+    expect(snapshot(b)).toBe(snapshot(a));
+  });
+});
