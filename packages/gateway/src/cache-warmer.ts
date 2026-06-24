@@ -34,6 +34,7 @@ import {
   strategyWantsWarming,
   getCacheSizeSnapshot,
   getCacheStrategy,
+  estimateMetaDistillCostPerCall,
 } from "@loreai/core";
 import type {
   InterTurnHistogram,
@@ -47,7 +48,7 @@ import { recordWorkerFailure, recordWorkerSuccess } from "./worker-health";
 import { resignBody } from "./cch";
 import { resolveUpstreamRoute } from "./config";
 import { isBedrockMantleHost } from "./translate/bedrock";
-import { getModelEntrySync } from "./worker-model";
+import { getModelEntrySync, getWorkerModel } from "./worker-model";
 import { recordWarmupCost } from "./cost-tracker";
 import { upstreamFetch } from "./fetch";
 import { emitWarmupCircuitBreakerMetric } from "./sentry";
@@ -1268,9 +1269,37 @@ export function shouldWarm(
       maxCycles,
     );
     const expectedFutureTurns = Math.min(totalTurns, SHADOW_FUTURE_TURNS_CAP);
+    // #947 — meta-aware cost model. Source the meta threshold from config
+    // and pre-compute the per-call LLM cost from the worker model rates. The
+    // pure function falls back to "no adjustment" (byte-identical to pre-#947)
+    // when either is missing — so the cost model flip is opt-in by config.
+    const metaThreshold = cfg.distillation.metaThreshold;
+    // Seer finding (medium severity): price meta-distillation with the
+    // WORKER model's rates, not the session model's. Meta-distillation is
+    // performed by a worker LLM (typically cheaper than the session model —
+    // e.g. Sonnet for a Sonnet session, MiniMax-MiniMax for an Opus session).
+    // Using `state.lastUpstream?.model` would price the meta call at the
+    // session model rate (Opus), inflating the cost and biasing the
+    // strategy toward hold-warm when warming is the wrong call. The same
+    // `getWorkerModel(...)` pattern is used by idle.ts and pipeline.ts for
+    // analogous cost calculations.
+    const workerModelID = getWorkerModel(state.lastUpstream)?.modelID;
+    const workerModel = workerModelID
+      ? getModelEntrySync(workerModelID)
+      : undefined;
+    const metaDistillCostPerCall = estimateMetaDistillCostPerCall(
+      workerModel,
+      metaThreshold,
+    );
     const result = evaluateCacheStrategy(
       state.sessionID,
-      { pReturn: pReturns, expectedCycles, expectedFutureTurns },
+      {
+        pReturn: pReturns,
+        expectedCycles,
+        expectedFutureTurns,
+        metaThreshold,
+        metaDistillCostPerCall,
+      },
       {
         readPerToken: cacheReadCostPerMTok / 1_000_000,
         writePerToken: cacheMissCostPerMTok / 1_000_000,
@@ -1288,6 +1317,8 @@ export function shouldWarm(
           `gradFull=${snap?.full ?? "?"} gradCompressed=${snap?.compressed ?? "?"} ` +
           `apiActual=${apiActual} pReturn=${pReturns.toFixed(2)} ` +
           `cycles=${expectedCycles.toFixed(1)} futureTurns=${expectedFutureTurns} ` +
+          `meta[threshold=${metaThreshold} expectedBusts=${result.expectedMetaBusts.toFixed(3)} ` +
+          `bustCost=${result.metaBustCost.toFixed(4)}] ` +
           `costs[hold=${result.holdWarmCost.toFixed(4)} ` +
           `coolBust=${result.coolBustCost.toFixed(4)} ` +
           `coolFull=${result.coolFullWriteCost.toFixed(4)}]`,
