@@ -4650,6 +4650,7 @@ describe("tier-based context management", () => {
       consecutiveBusts: number;
       transformCount: number;
       layer: number;
+      capFit: boolean;
     }
     function captureHook(): HookCall[] {
       const calls: HookCall[] = [];
@@ -4661,6 +4662,7 @@ describe("tier-based context management", () => {
             consecutiveBusts: info.consecutiveBusts,
             transformCount: info.transformCount,
             layer: info.layer,
+            capFit: info.capFit,
           }),
         onSpiral: (info) =>
           calls.push({
@@ -4669,6 +4671,7 @@ describe("tier-based context management", () => {
             consecutiveBusts: info.consecutiveBusts,
             transformCount: info.transformCount,
             layer: info.layer,
+            capFit: info.capFit,
           }),
         onRecovered: (info) =>
           calls.push({
@@ -4677,6 +4680,7 @@ describe("tier-based context management", () => {
             consecutiveBusts: info.consecutiveBusts,
             transformCount: info.transformCount,
             layer: info.layer,
+            capFit: info.capFit,
           }),
       });
       return calls;
@@ -4946,6 +4950,168 @@ describe("tier-based context management", () => {
       for (let n = 1; n <= 5; n++) {
         transform({ messages: msgs, projectPath: PROJECT, sessionID: SID });
         expect(inspectSessionState(SID)?.transformCount).toBe(n);
+      }
+    });
+
+    // ----- #952 follow-up tests -----
+
+    test("tier-gate bypass with large LTM cache: NOT cap-fit, fires onSpiral past grace (#952)", () => {
+      // Regression for #952 Finding #1 — the DISCRIMINATING case that proves
+      // why `result.capFit` is needed instead of a post-hoc
+      // `layer === 0 && getTier(totalTokens) === 0` check.
+      //
+      // The original cap-fit hardcode checked `layer0Input <= layer0Ceiling`
+      // (full input INCLUDING the LTM delta). A post-hoc tier check on
+      // `totalTokens` is structurally LOOSER, because the tier-gate bypass
+      // returns `totalTokens` as the message-only figure (expectedInput minus
+      // the LTM delta — see transformInner). So a session whose raw messages
+      // fit tier 0 but whose FULL input (messages + a large LTM injection) is
+      // over the layer-0 cap would be wrongly classified cap-fit and have its
+      // spiral alert suppressed.
+      //
+      // This test constructs exactly that disagreement:
+      //   full input  = lastKnownInput(150K) + newMsgTokens(~0.9K) + ltmDelta(120K)
+      //               ≈ 271K  → OVER the 200K l0cap → tier-gate bypass (layer 0)
+      //   totalTokens = full input − ltmDelta ≈ 151K → tier 0
+      // so `layer === 0 && getTier(totalTokens) === 0` is TRUE (the OLD buggy
+      // predicate suppresses), but `result.capFit` is FALSE (the alert must
+      // fire). Reverting Fix #1 makes the final assertion fail.
+      const msgs = Array.from({ length: 8 }, (_, i) =>
+        makeMsg(
+          `ltm-${i}`,
+          i % 2 === 0 ? "user" : "assistant",
+          "z".repeat(200),
+          SID,
+        ),
+      );
+      // Calibrate with LTM at 0 so the baseline delta is 0, THEN inject a large
+      // LTM cache so the transform sees a +120K LTM delta. The delta pushes the
+      // full input over the cap while the message-only total stays in tier 0.
+      setLtmTokens(0, SID);
+      calibrate(150_000, SID, msgs.length); // captures lastKnownLtm = 0
+      setLtmTokens(120_000, SID); // ltmDelta = 120K at transform time
+      setCachePricing(0, 0); // shouldCompress declines → tier-gate bypass (path b)
+      for (let i = 0; i < 4; i++) recordCacheUsage(440_000, 0, 2, SID);
+      setTransformCountForTest(SID, COLD_START_GRACE_TURNS + 1);
+
+      const calls = captureHook();
+      try {
+        const result = transform({
+          messages: msgs,
+          projectPath: PROJECT,
+          sessionID: SID,
+        });
+        // Tier-gate bypass: over-cap full input, passed through at layer 0,
+        // explicitly NOT cap-fit.
+        expect(result.layer).toBe(0);
+        expect(result.capFit).toBe(false);
+        // THE DISCRIMINATING CONDITION: the message-only totalTokens is tier 0,
+        // so the old `layer === 0 && getTier(totalTokens) === 0` predicate is
+        // TRUE and would suppress the alert. capFit:false fires it correctly.
+        expect(getTier(result.totalTokens)).toBe(0);
+        // Genuine exhaustion (over-cap on full input) → MUST fire onSpiral.
+        expect(calls.map((c) => c.kind)).toEqual(["spiral"]);
+        expect(calls[0].consecutiveBusts).toBeGreaterThanOrEqual(2);
+        expect(calls[0].layer).toBe(0);
+        // The capFit field propagates to the hook payload (false here).
+        expect(calls[0].capFit).toBe(false);
+      } finally {
+        setBustSpiralHook(null);
+      }
+    });
+
+    test("cap-fit cold-start breadcrumb carries capFit:true to the hook (#952)", () => {
+      // Locks the BustSpiralInfo.capFit propagation for the TRUE case (NIT-B):
+      // the cold-start breadcrumb fires even for genuine cap-fit sessions (it is
+      // useful telemetry regardless of cap-fit), and the payload must report
+      // capFit:true so gateway dashboards can distinguish "fits but busting
+      // structurally" from "over the cap and busting from growth". Hardcoding
+      // capFit:false in the bustSpiralInfo builder makes this assertion fail.
+      const msgs = [
+        makeMsg("ccs-1", "user", "Hello", SID),
+        makeMsg("ccs-2", "assistant", "Hi", SID),
+      ];
+      calibrate(50_000, SID, msgs.length); // under 200K l0cap → cap-fit passthrough
+      setCachePricing(0, 0);
+      for (let i = 0; i < 4; i++) recordCacheUsage(100_000, 0, 3, SID);
+
+      const calls = captureHook();
+      try {
+        // Fresh session → transformCount becomes 1 → within grace → onColdStart.
+        const result = transform({
+          messages: msgs,
+          projectPath: PROJECT,
+          sessionID: SID,
+        });
+        expect(result.layer).toBe(0);
+        expect(result.capFit).toBe(true);
+        expect(calls.map((c) => c.kind)).toEqual(["coldStart"]);
+        expect(calls[0].capFit).toBe(true);
+      } finally {
+        setBustSpiralHook(null);
+      }
+    });
+
+    test("genuine cap-fit passthrough: still suppresses onSpiral even past grace (#952)", () => {
+      // Companion to the above. A session that ACTUALLY fits the cap-fit
+      // passthrough (layer 0, fits l0cap with headroom) must continue to
+      // suppress the alert — its busts are structural, not growth.
+      // This locks the path a (cap-fit) → capFit:true semantics.
+      const msgs = [
+        makeMsg("capfit-1", "user", "Hello", SID),
+        makeMsg("capfit-2", "assistant", "Hi", SID),
+      ];
+      calibrate(50_000, SID, msgs.length); // under 200K l0cap with headroom
+      setCachePricing(0, 0);
+      // Force sustained busts (structural drift scenario).
+      for (let i = 0; i < 4; i++) recordCacheUsage(100_000, 0, 3, SID);
+      setTransformCountForTest(SID, COLD_START_GRACE_TURNS + 1);
+
+      const calls = captureHook();
+      try {
+        const result = transform({
+          messages: msgs,
+          projectPath: PROJECT,
+          sessionID: SID,
+        });
+        expect(result.layer).toBe(0);
+        expect(result.capFit).toBe(true);
+        expect(getTier(result.totalTokens)).toBe(0);
+        // Cap-fit → no spiral alert despite past grace + sustained busts.
+        expect(calls).toEqual([]);
+      } finally {
+        setBustSpiralHook(null);
+      }
+    });
+
+    test("bust→recovery→bust within grace: onColdStart fires once, not per cycle (#952)", () => {
+      // Regression for #952 Finding #2 (the Seer comment). The original
+      // code cleared `bustSpiralColdStartLogged` on recovery, allowing
+      // multiple `onColdStart` events for a single session within the
+      // cold-start phase. The cold-start grace window is bounded by
+      // transformCount for the lifetime of the process — a single
+      // breadcrumb per session is the design intent (matches JSDoc).
+      const msgs = setUpOverCapBustingSession();
+      const calls = captureHook();
+      try {
+        // First spiral within grace → onColdStart fires.
+        transform({ messages: msgs, projectPath: PROJECT, sessionID: SID });
+        expect(calls.map((c) => c.kind)).toEqual(["coldStart"]);
+        expect(inspectSessionState(SID)?.bustSpiralColdStartLogged).toBe(true);
+        // busts drop to 0 (cache hit) → recovery, no onColdStart.
+        recordCacheUsage(10, 1_000_000, 1_000, SID);
+        transform({ messages: msgs, projectPath: PROJECT, sessionID: SID });
+        // bustSpiralColdStartLogged is intentionally NOT cleared on
+        // recovery — the breadcrumb is per cold-start phase, not per
+        // spiral episode.
+        expect(inspectSessionState(SID)?.bustSpiralColdStartLogged).toBe(true);
+        // Second spiral within the same grace window → MUST NOT re-fire
+        // onColdStart.
+        for (let i = 0; i < 4; i++) recordCacheUsage(440_000, 0, 2, SID);
+        transform({ messages: msgs, projectPath: PROJECT, sessionID: SID });
+        expect(calls.map((c) => c.kind)).toEqual(["coldStart"]);
+      } finally {
+        setBustSpiralHook(null);
       }
     });
   });
