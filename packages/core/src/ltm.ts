@@ -552,8 +552,10 @@ export function update(
  *
  * This is the LOCAL-ONLY purge registry: only add tables whose rows are pure
  * local derived state. Do NOT add synced convergent registers (e.g.
- * knowledge_meta) — a local DELETE there would diverge from tombstone semantics
- * once team sync lands.
+ * knowledge_meta) — a local DELETE there would diverge from its
+ * convergent-register sync/merge semantics (confidence LWW->merge) once team
+ * sync lands. (Note: "tombstone" elsewhere in this file means the A2 is_deleted
+ * death-cert version, not the retired knowledge_tombstones table.)
  */
 export const LOGICAL_ID_BOOKKEEPING_TABLES = [
   "knowledge_ref_validity",
@@ -587,6 +589,14 @@ export function remove(id: string, metadata?: KnowledgeMetadata) {
   for (const table of LOGICAL_ID_BOOKKEEPING_TABLES) {
     db().query(`DELETE FROM ${table} WHERE logical_id = ?`).run(logicalId);
   }
+  // Outcome-reward injection log (#497): same orphan class, but keyed on a
+  // composite (session_id, logical_id) PK + carries a project_id, so it can't
+  // ride LOGICAL_ID_BOOKKEEPING_TABLES (uniform single logical_id shape). Purge
+  // by logical_id here; the project/session bulk-delete paths sweep it by their
+  // own scope. (#996)
+  db()
+    .query("DELETE FROM knowledge_session_injections WHERE logical_id = ?")
+    .run(logicalId);
 }
 
 /** True when the entry for this logical_id was deleted (tombstoned). */

@@ -644,6 +644,12 @@ export function clearProject(projectPath: string): ClearResult {
         )
         .run(pid);
     }
+    // Outcome-reward injection log (#497) carries a project_id column, so sweep
+    // it by project scope directly — this also reclaims any rows already
+    // orphaned by a prior delete that predates this fix (#996).
+    database
+      .query("DELETE FROM knowledge_session_injections WHERE project_id = ?")
+      .run(pid);
     database.query("DELETE FROM knowledge WHERE project_id = ?").run(pid);
     database
       .query("DELETE FROM temporal_messages WHERE project_id = ?")
@@ -767,6 +773,12 @@ export function deleteProject(projectId: string): ClearResult | null {
         )
         .run(projectId);
     }
+    // Outcome-reward injection log (#497) carries a project_id column, so sweep
+    // it by project scope directly — this also reclaims any rows already
+    // orphaned by a prior delete that predates this fix (#996).
+    database
+      .query("DELETE FROM knowledge_session_injections WHERE project_id = ?")
+      .run(projectId);
     database.query("DELETE FROM knowledge WHERE project_id = ?").run(projectId);
     database
       .query("DELETE FROM temporal_messages WHERE project_id = ?")
@@ -845,6 +857,12 @@ export function clearKnowledge(projectPath: string): number {
       )
       .run(pid);
   }
+  // Outcome-reward injection log (#497) carries a project_id column, so sweep
+  // it by project scope directly — this also reclaims any rows already orphaned
+  // by a prior delete that predates this fix (#996).
+  db()
+    .query("DELETE FROM knowledge_session_injections WHERE project_id = ?")
+    .run(pid);
   db().query("DELETE FROM knowledge WHERE project_id = ?").run(pid);
 
   invalidateProjectsCache();
@@ -967,6 +985,11 @@ export function deleteSession(
     .run(pid, sessionId);
   database
     .query("DELETE FROM session_state WHERE session_id = ?")
+    .run(sessionId);
+  // Outcome-reward injection log (#497) is keyed on session_id — purge it here
+  // or its rows orphan once the session's messages are gone (#996).
+  database
+    .query("DELETE FROM knowledge_session_injections WHERE session_id = ?")
     .run(sessionId);
 
   invalidateProjectsCache();
@@ -1236,6 +1259,17 @@ export function moveSessions(
     database
       .query(
         `UPDATE session_prompt_deltas SET project_id = ? WHERE project_id = ? AND session_id IN (${placeholders})`,
+      )
+      .run(toId, fromProjectId, ...allIds);
+
+    // Outcome-reward injection log (#497) is keyed on session_id and scoped by
+    // project_id; creditSessionOutcome filters on the session's CURRENT project,
+    // so the rows must follow the session to the target or its credits are
+    // silently dropped (and the rows orphan if the source project is later
+    // deleted). Mirror the per-session re-point above. (#996)
+    database
+      .query(
+        `UPDATE knowledge_session_injections SET project_id = ? WHERE project_id = ? AND session_id IN (${placeholders})`,
       )
       .run(toId, fromProjectId, ...allIds);
 
