@@ -10,6 +10,7 @@ import {
   runRelaxedSearch,
 } from "./search";
 import * as embedding from "./embedding";
+import { ReadPathTimer } from "./read-telemetry";
 import { sessionVerifierVerdict } from "./tool-trace";
 import * as latReader from "./lat-reader";
 import {
@@ -1734,6 +1735,11 @@ export async function forSession(
   maxTokens: number,
   options?: ForSessionOptions,
 ): Promise<KnowledgeEntry[]> {
+  // Measure this hot per-turn path's main-thread blocking cost (#966 B). The
+  // awaits below (embed + the pool-backed vector search) are wrapped so the
+  // wall-time remainder is the synchronous entry-load / FTS / scoring / packing
+  // cost. Emitted at each real-work return.
+  const timer = new ReadPathTimer();
   const pid = ensureProject(projectPath);
   const categoryFilter = options?.categories;
   const excludeFilter = options?.excludeCategories;
@@ -1837,6 +1843,7 @@ export async function forSession(
         err,
       );
     }
+    timer.emit("forSession", projectEntries.length + crossEntries.length);
     return result;
   }
 
@@ -1880,8 +1887,12 @@ export async function forSession(
     // that keyword-based FTS5 misses.
     let vectorScores: Map<string, number>;
     try {
-      const [contextVec] = await embedding.embed([sessionContext], "query");
-      const hits = await embedding.vectorSearch(contextVec, 50, excludeFilter);
+      const [contextVec] = await timer.await(
+        embedding.embed([sessionContext], "query"),
+      );
+      const hits = await timer.await(
+        embedding.vectorSearch(contextVec, 50, excludeFilter),
+      );
       vectorScores = new Map(hits.map((h) => [h.id, h.similarity]));
     } catch (err) {
       log.warn("Vector scoring failed, falling back to FTS5:", err);
@@ -2114,6 +2125,7 @@ export async function forSession(
     }
   }
 
+  timer.emit("forSession", projectEntries.length + crossEntries.length);
   return result;
 }
 
