@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +8,7 @@ import {
   DirectFsResolver,
   extractReferences,
   NoopResolver,
+  parseProbeSnapshot,
   type Reference,
   type RepoView,
   resolveRefAgainstView,
@@ -352,6 +353,8 @@ describe("resolveRefAgainstView (Windows backslash normalization)", () => {
     files: new Set(["a/b/c/d.ts"]),
     filesLower: new Map([["a/b/c/d.ts", ["a/b/c/d.ts"]]]),
     basenames: new Map([["d.ts", ["a/b/c/d.ts"]]]),
+    presentSymbols: null,
+    searchedSymbols: null,
     scripts: null,
     makeTargets: null,
     lineCount: (rel) => (rel === "a/b/c/d.ts" ? 5 : null),
@@ -396,6 +399,8 @@ describe("resolveRefAgainstView (case-insensitive file resolution, #969)", () =>
       ["db.ts", ["packages/core/src/db.ts"]],
       ["readme.md", ["readme.md"]],
     ]),
+    presentSymbols: null,
+    searchedSymbols: null,
     scripts: null,
     makeTargets: null,
     lineCount: (rel) =>
@@ -439,6 +444,8 @@ describe("resolveRefAgainstView (case-insensitive file resolution, #969)", () =>
       files: new Set(["src/Foo.ts", "src/foo.ts"]),
       filesLower: new Map([["src/foo.ts", ["src/Foo.ts", "src/foo.ts"]]]),
       basenames: new Map([["foo.ts", ["src/Foo.ts", "src/foo.ts"]]]),
+      presentSymbols: null,
+      searchedSymbols: null,
       scripts: null,
       makeTargets: null,
       lineCount: () => 1,
@@ -455,6 +462,8 @@ describe("resolveRefAgainstView (case-insensitive file resolution, #969)", () =>
       files: new Set(["src/Foo.ts", "src/foo.ts"]),
       filesLower: new Map([["src/foo.ts", ["src/Foo.ts", "src/foo.ts"]]]),
       basenames: new Map([["foo.ts", ["src/Foo.ts", "src/foo.ts"]]]),
+      presentSymbols: null,
+      searchedSymbols: null,
       scripts: null,
       makeTargets: null,
       lineCount: () => 1,
@@ -474,6 +483,8 @@ describe("resolveRefAgainstView (case-insensitive file resolution, #969)", () =>
         ["b/foo.ts", ["b/foo.ts"]],
       ]),
       basenames: new Map([["foo.ts", ["a/Foo.ts", "b/foo.ts"]]]),
+      presentSymbols: null,
+      searchedSymbols: null,
       scripts: null,
       makeTargets: null,
       lineCount: () => 5,
@@ -493,6 +504,8 @@ describe("resolveRefAgainstView (case-insensitive file resolution, #969)", () =>
         ["b/foo.ts", ["b/FOO.ts"]],
       ]),
       basenames: new Map([["foo.ts", ["a/Foo.ts", "b/FOO.ts"]]]),
+      presentSymbols: null,
+      searchedSymbols: null,
       scripts: null,
       makeTargets: null,
       lineCount: () => 5,
@@ -781,6 +794,358 @@ describe.skipIf(process.platform === "win32")(
       )?.get(key);
       expect(direct).toBe(expected);
       expect(synthetic).toBe(expected);
+    });
+  },
+);
+
+// --- #911 cited-symbol validation ------------------------------------------
+
+describe("extractReferences — cited symbols (#911)", () => {
+  const syms = (text: string): string[] =>
+    extractReferences(text)
+      .filter((r) => r.kind === "symbol")
+      .map((r) => (r as { name: string }).name);
+
+  test("a codey symbol co-cited with a file ref is extracted", () => {
+    expect(
+      syms("`evaluateCacheStrategy` called from cache-warmer.ts:1252"),
+    ).toContain("evaluateCacheStrategy");
+  });
+
+  test("PascalCase / snake_case / call-like all qualify as codey", () => {
+    const s = syms(
+      "see refs.ts:1 — `RepoView`, `last_reinforced_at`, `walk()`",
+    );
+    expect(s).toEqual(
+      expect.arrayContaining(["RepoView", "last_reinforced_at", "walk"]),
+    );
+  });
+
+  // Gate B (adjacency bound): a backtick identifier with NO co-cited file ref is
+  // too unmoored to act on — never a symbol ref.
+  test("a backtick identifier WITHOUT any co-cited file ref is NOT a symbol", () => {
+    expect(syms("`shouldHoldPrefixWarm` is a pure helper")).toEqual([]);
+  });
+
+  // Gate C (codey shape): the false-positive killer. Bare marker-free lowercase
+  // prose words in backticks must never become symbol refs.
+  test("bare lowercase prose words in backticks are rejected (codey gate)", () => {
+    const s = syms("the `total` and `run` of src/foo.ts:1");
+    expect(s).not.toContain("total");
+    expect(s).not.toContain("run");
+  });
+
+  test("`foo` and `foo()` dedupe to a single symbol", () => {
+    const s = syms("`fooBar` then `fooBar()` near src/a.ts:1");
+    expect(s.filter((n) => n === "fooBar")).toHaveLength(1);
+  });
+
+  test("a command token is not also captured as a symbol", () => {
+    const refs = extractReferences("run `pnpm run lint` in src/a.ts:1");
+    expect(refs.some((r) => r.kind === "symbol")).toBe(false);
+  });
+});
+
+describe("resolveRefAgainstView (symbol presence, #911)", () => {
+  const mk = (
+    present: Set<string> | null,
+    searched: Set<string> | null = present,
+  ): RepoView => ({
+    files: new Set(),
+    filesLower: new Map(),
+    basenames: new Map(),
+    presentSymbols: present,
+    searchedSymbols: searched,
+    scripts: null,
+    makeTargets: null,
+    lineCount: () => null,
+  });
+  const sym = (name: string): Reference => ({
+    kind: "symbol",
+    name,
+    raw: name,
+  });
+
+  test("present anywhere → ok", () => {
+    expect(resolveRefAgainstView(sym("foo"), mk(new Set(["foo"])))).toBe("ok");
+  });
+  test("searched and absent repo-wide → missing", () => {
+    // searched contains foo (it was looked for) but present does not.
+    expect(
+      resolveRefAgainstView(sym("foo"), mk(new Set(), new Set(["foo"]))),
+    ).toBe("missing");
+  });
+  test("presence unavailable (null) → unknown (neutral)", () => {
+    expect(resolveRefAgainstView(sym("foo"), mk(null, null))).toBe("unknown");
+  });
+  // SF1: a grep that errored leaves the name out of BOTH sets → unsearched →
+  // unknown, never a false "missing".
+  test("not in the searched set (grep errored) → unknown (neutral)", () => {
+    expect(
+      resolveRefAgainstView(sym("foo"), mk(new Set(["bar"]), new Set(["bar"]))),
+    ).toBe("unknown");
+  });
+});
+
+// Symbol presence needs a real git work tree (`git grep`). Build a git fixture so
+// both the "ok"/"missing" verdicts AND the non-git → neutral path are exercised.
+describe.skipIf(process.platform === "win32")(
+  "DirectFsResolver symbol resolution (#911)",
+  () => {
+    let root: string;
+    beforeAll(() => {
+      root = mkdtempSync(join(tmpdir(), "lore-sym-"));
+      mkdirSync(join(root, "src"), { recursive: true });
+      writeFileSync(
+        join(root, "src", "code.ts"),
+        "export function evaluateCacheStrategy() {\n  return 1;\n}\nconst fooBarBaz = 2;\n",
+      );
+      execFileSync("git", ["init", "-q"], { cwd: root });
+      execFileSync("git", ["add", "-A"], { cwd: root });
+    });
+    afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+    const symStatus = async (raw: string): Promise<string | undefined> => {
+      const refs = extractReferences(raw);
+      const sym = refs.find((r) => r.kind === "symbol");
+      expect(sym).toBeDefined();
+      const map = await new DirectFsResolver(root).resolve(refs);
+      return map?.get((sym as { raw: string }).raw);
+    };
+
+    test("present symbol → ok", async () => {
+      expect(await symStatus("`evaluateCacheStrategy` in src/code.ts:1")).toBe(
+        "ok",
+      );
+    });
+    test("absent symbol → missing", async () => {
+      expect(await symStatus("`removedHelperFn` in src/code.ts:1")).toBe(
+        "missing",
+      );
+    });
+    // `git grep -w` is a whole-word match, so a camelCase token present only as a
+    // substring (`fooBar` inside `fooBarBaz`) is genuinely absent → missing.
+    test("camelCase token present only as a substring → missing (word boundary)", async () => {
+      expect(await symStatus("`fooBar` in src/code.ts:1")).toBe("missing");
+    });
+    test("non-git root → symbol unknown (neutral), never a false missing", async () => {
+      const plain = mkdtempSync(join(tmpdir(), "lore-nogit-"));
+      try {
+        mkdirSync(join(plain, "src"), { recursive: true });
+        writeFileSync(join(plain, "src", "code.ts"), "nope\n");
+        const refs = extractReferences(
+          "`evaluateCacheStrategy` in src/code.ts:1",
+        );
+        const sym = refs.find((r) => r.kind === "symbol") as { raw: string };
+        const map = await new DirectFsResolver(plain).resolve(refs);
+        expect(map?.get(sym.raw)).toBe("unknown");
+      } finally {
+        rmSync(plain, { recursive: true, force: true });
+      }
+    });
+
+    // SF3: resolving with a SUBDIRECTORY root must still find a symbol defined in
+    // a SIBLING package, because the grep runs from the git TOPLEVEL — matching
+    // the probe's `cd $(git rev-parse --show-toplevel)`. (Pre-fix, Direct-FS
+    // greped `git -C <subdir>`, scoped to that subtree → false "missing" on a
+    // sibling-defined symbol + a silent divergence from the probe. Verified:
+    // `git -C pkgA grep <pkgB-only-symbol>` exits 1.)
+    test("subdirectory root greps from the toplevel → sibling-package symbol → ok", async () => {
+      const repo = mkdtempSync(join(tmpdir(), "lore-symsub-"));
+      try {
+        mkdirSync(join(repo, "pkgA"), { recursive: true });
+        mkdirSync(join(repo, "pkgB"), { recursive: true });
+        // The symbol is defined ONLY in pkgB; pkgA never mentions it.
+        writeFileSync(join(repo, "pkgA", "a.ts"), "const x = 1;\n");
+        writeFileSync(
+          join(repo, "pkgB", "b.ts"),
+          "export const siblingOnlySymbol = 1;\n",
+        );
+        execFileSync("git", ["init", "-q"], { cwd: repo });
+        execFileSync("git", ["add", "-A"], { cwd: repo });
+        const refs = extractReferences("`siblingOnlySymbol` in pkgA/a.ts:1");
+        const sym = refs.find((r) => r.kind === "symbol") as { raw: string };
+        // Resolver root is the pkgA subdir; the symbol lives in the pkgB sibling.
+        const map = await new DirectFsResolver(join(repo, "pkgA")).resolve(
+          refs,
+        );
+        expect(map?.get(sym.raw)).toBe("ok");
+      } finally {
+        rmSync(repo, { recursive: true, force: true });
+      }
+    });
+
+    // SF2: an inherited GIT_DIR / GIT_INDEX_FILE must not redirect the grep to the
+    // wrong repo (which would mass-false-miss). The env is scrubbed, so a present
+    // symbol still resolves ok even with a bogus GIT_DIR set.
+    test("inherited bogus GIT_DIR does not cause a false missing (env scrubbed)", async () => {
+      const prevDir = process.env.GIT_DIR;
+      const prevIdx = process.env.GIT_INDEX_FILE;
+      process.env.GIT_DIR = join(tmpdir(), "lore-bogus-gitdir-does-not-exist");
+      process.env.GIT_INDEX_FILE = "/dev/null";
+      try {
+        expect(
+          await symStatus("`evaluateCacheStrategy` in src/code.ts:1"),
+        ).toBe("ok");
+      } finally {
+        if (prevDir === undefined) delete process.env.GIT_DIR;
+        else process.env.GIT_DIR = prevDir;
+        if (prevIdx === undefined) delete process.env.GIT_INDEX_FILE;
+        else process.env.GIT_INDEX_FILE = prevIdx;
+      }
+    });
+  },
+);
+
+describe("buildRefcheckProbeScript symbol section (#911)", () => {
+  test("emits the symbol section, git guard, OK+DONE markers, and a per-symbol grep", () => {
+    const script = buildRefcheckProbeScript(
+      extractReferences("`evaluateCacheStrategy` and `RepoView` in refs.ts:1"),
+    );
+    expect(script).toContain("===LORE-SYMS===");
+    expect(script).toContain("git rev-parse --is-inside-work-tree");
+    expect(script).toContain("===LORE-SYMS-OK===");
+    expect(script).toContain("===LORE-SYMS-DONE===");
+    // per-symbol grep that emits `name\t1` / `name\t0` based on exit status.
+    expect(script).toContain("git grep -qwF -- 'evaluateCacheStrategy'");
+    expect(script).toContain("git grep -qwF -- 'RepoView'");
+    expect(script).toContain("case $? in 0)");
+  });
+
+  // Defense-in-depth: a symbol name outside the identifier charset must never be
+  // coined into a grep argument (extraction guarantees the charset; assert the
+  // interpolation-site guard independently).
+  test("never coins a grep arg outside the identifier charset", () => {
+    const malicious: Reference[] = [
+      { kind: "symbol", name: "a';rm -rf ~;'", raw: "x" },
+      { kind: "symbol", name: "okName", raw: "y" },
+    ];
+    const script = buildRefcheckProbeScript(malicious);
+    expect(script).toContain("'okName'");
+    expect(script).not.toContain("rm -rf");
+  });
+});
+
+describe("parseProbeSnapshot symbol section (#911)", () => {
+  const base = [
+    "src/foo.ts",
+    "===LORE-PKG===",
+    "{}",
+    "===LORE-MAKE===",
+    "",
+    "===LORE-LINES===",
+    "src/foo.ts\t5",
+  ];
+
+  test("OK+DONE with name\\t1 / name\\t0 → present and searched populated correctly", () => {
+    const text = [
+      ...base,
+      "===LORE-SYMS===",
+      "===LORE-SYMS-OK===",
+      "evaluateCacheStrategy\t1",
+      "removedFn\t0",
+      "===LORE-SYMS-DONE===",
+    ].join("\n");
+    const view = parseProbeSnapshot(text);
+    expect(view?.presentSymbols?.has("evaluateCacheStrategy")).toBe(true);
+    expect(view?.presentSymbols?.has("removedFn")).toBe(false);
+    // both were definitively searched
+    expect(view?.searchedSymbols?.has("evaluateCacheStrategy")).toBe(true);
+    expect(view?.searchedSymbols?.has("removedFn")).toBe(true);
+  });
+
+  test("OK+DONE with no symbol lines → empty sets (real misses, NOT neutral)", () => {
+    const text = [
+      ...base,
+      "===LORE-SYMS===",
+      "===LORE-SYMS-OK===",
+      "===LORE-SYMS-DONE===",
+    ].join("\n");
+    const view = parseProbeSnapshot(text);
+    expect(view?.presentSymbols).not.toBeNull();
+    expect(view?.searchedSymbols).not.toBeNull();
+    expect(view?.presentSymbols?.size).toBe(0);
+  });
+
+  // SF4: OK but NO DONE → output was truncated mid-section → null (neutral), so
+  // an un-emitted symbol is never falsely read as absent.
+  test("OK but NO DONE marker (truncated) → null (neutral)", () => {
+    const text = [
+      ...base,
+      "===LORE-SYMS===",
+      "===LORE-SYMS-OK===",
+      "evaluateCacheStrategy\t1",
+    ].join("\n");
+    const view = parseProbeSnapshot(text);
+    expect(view?.presentSymbols).toBeNull();
+    expect(view?.searchedSymbols).toBeNull();
+  });
+
+  test("section present but NO OK marker (git absent) → null (neutral)", () => {
+    const text = [...base, "===LORE-SYMS==="].join("\n");
+    expect(parseProbeSnapshot(text)?.presentSymbols).toBeNull();
+  });
+
+  test("old probe with no symbol section → null (neutral, back-compat)", () => {
+    expect(parseProbeSnapshot(base.join("\n"))?.presentSymbols).toBeNull();
+  });
+});
+
+// End-to-end: EXECUTE the generated probe under a POSIX shell against a git
+// fixture so the real `git grep -qwF` runs, feed the output through
+// SyntheticProbeResolver, and confirm it agrees with DirectFsResolver ref-by-ref.
+describe.skipIf(process.platform === "win32")(
+  "symbol probe real-shell ↔ Direct-FS parity (#911)",
+  () => {
+    let root: string;
+    beforeAll(() => {
+      root = mkdtempSync(join(tmpdir(), "lore-symparity-"));
+      mkdirSync(join(root, "src"), { recursive: true });
+      writeFileSync(
+        join(root, "src", "code.ts"),
+        "export function evaluateCacheStrategy() {}\nconst fooBarBaz = 1;\n",
+      );
+      execFileSync("git", ["init", "-q"], { cwd: root });
+      execFileSync("git", ["add", "-A"], { cwd: root });
+    });
+    afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+    test.each([
+      ["`evaluateCacheStrategy` in src/code.ts:1", "ok"],
+      ["`removedHelper` in src/code.ts:1", "missing"],
+      ["`fooBar` in src/code.ts:1", "missing"], // substring only → word-boundary miss
+    ])("real probe and Direct-FS agree on %j (symbol → %s)", async (raw, expected) => {
+      const refs = extractReferences(raw);
+      const sym = refs.find((r) => r.kind === "symbol") as { raw: string };
+      const direct = (await new DirectFsResolver(root).resolve(refs))?.get(
+        sym.raw,
+      );
+      const probeOut = execFileSync(
+        "sh",
+        ["-c", buildRefcheckProbeScript(refs)],
+        {
+          cwd: root,
+          encoding: "utf8",
+        },
+      );
+      const synthetic = (
+        await new SyntheticProbeResolver(probeOut).resolve(refs)
+      )?.get(sym.raw);
+      expect(direct).toBe(expected);
+      expect(synthetic).toBe(expected);
+    });
+
+    // The probe must exit 0 even when the last symbol grep finds nothing —
+    // otherwise the client tool flags `isError` and the WHOLE batch goes neutral.
+    test("probe exits 0 when a symbol is absent (no silent batch abort)", () => {
+      const refs = extractReferences(
+        "`definitelyNotPresentXyz` in src/code.ts:1",
+      );
+      const r = spawnSync("sh", ["-c", buildRefcheckProbeScript(refs)], {
+        cwd: root,
+        encoding: "utf8",
+      });
+      expect(r.status).toBe(0);
     });
   },
 );
