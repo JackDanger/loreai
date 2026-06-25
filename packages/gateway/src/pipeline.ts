@@ -143,6 +143,8 @@ import {
   isBedrockMantleDispatch,
   toMantleModelId,
 } from "./translate/bedrock";
+import { buildVertexUpstream, vertexHost } from "./translate/vertex";
+import { getVertexAccessToken, resolveVertexProject } from "./vertex-auth";
 import {
   buildOpenAIUpstreamRequest,
   buildOpenAIResponse,
@@ -2078,7 +2080,10 @@ function getLLMClient(config: GatewayConfig): LLMClient {
       workerUpstreams,
       getWorkerAuth,
       defaultModel,
-      { dedicatedWorkerKey: !!workerApiKey },
+      {
+        dedicatedWorkerKey: !!workerApiKey,
+        vertexProject: config.vertexProject,
+      },
     );
 
     // Workers always use the same provider as the session. Route worker
@@ -3315,7 +3320,7 @@ async function forwardToUpstream(
   const selfBuiltUpstreamUrl = bedrockMantle
     ? bedrockMantleUrl(config.bedrockRegion)
     : effectiveProtocol === "vertex"
-      ? `https://${config.vertexRegion}-aiplatform.googleapis.com`
+      ? `https://${vertexHost(config.vertexRegion)}`
       : null;
   const effectiveUpstreamBase =
     headerUpstream ??
@@ -3403,14 +3408,47 @@ async function forwardToUpstream(
     headers = result.headers;
     body = result.body;
   } else if (effectiveProtocol === "vertex") {
-    // Vertex AI is part 2 of issue #870 and has no upstream builder yet. Fail
-    // LOUD rather than silently falling through to the Anthropic builder below
-    // (which would POST Anthropic-shaped, x-api-key-authed requests to a Vertex
-    // URL). No PROVIDER_ROUTES entry produces "vertex" today, so this is a
-    // forward guard for when the route lands without its handler.
-    throw new Error(
-      "Vertex AI upstream is not yet implemented (issue #870 part 2)",
-    );
+    // Google Vertex AI (Claude): the native Anthropic Messages API over GCP
+    // OAuth2. Reuse buildAnthropicRequest (incl. cache_control), then apply the
+    // three Vertex transforms — model id in the URL path (+ the :rawPredict vs
+    // :streamRawPredict verb selects streaming), `anthropic_version` in the body
+    // (toVertexBody), and a GCP bearer token for auth (replacing the client
+    // x-api-key). The 1h extended-cache-ttl is an Anthropic beta of uncertain
+    // Vertex support, so downgrade to 5m — the same safe default used for other
+    // non-native Anthropic hosts (mantle / MiniMax / Fireworks).
+    const effectiveCache = cache
+      ? { ...cache, systemTTL: "5m" as const, conversationTTL: "5m" as const }
+      : cache;
+    const result = buildAnthropicRequest(req, effectiveCache);
+
+    const project = await resolveVertexProject(config.vertexProject);
+    if (!project) {
+      throw new Error(
+        "Vertex: no GCP project configured. Set GOOGLE_CLOUD_PROJECT (or " +
+          "LORE_VERTEX_PROJECT), or ensure Application Default Credentials " +
+          "provide a project.",
+      );
+    }
+    // Auth: GCP OAuth2 bearer (ADC) replaces the client credential. cch billing
+    // re-signing is gated on effectiveProtocol==="anthropic" below, so it never
+    // fires for Vertex. The transport rewrite (region from an X-Lore-Upstream-URL
+    // override else config, rawPredict URL, toVertexBody, and stripping the
+    // api.anthropic.com-only headers + setting the bearer) is a pure helper so
+    // it can be unit-tested in isolation — see buildVertexUpstream.
+    const token = await getVertexAccessToken();
+    const vt = buildVertexUpstream({
+      anthropicHeaders: result.headers,
+      anthropicBody: result.body as Record<string, unknown>,
+      effectiveUpstreamBase,
+      configRegion: config.vertexRegion,
+      project,
+      model: req.model,
+      stream: req.stream,
+      token,
+    });
+    url = vt.url;
+    headers = vt.headers;
+    body = vt.body;
   } else {
     // For non-native-Anthropic upstreams (MiniMax, Fireworks, etc.), downgrade
     // extended cache TTL ("1h") to standard 5-minute ephemeral — the "1h" TTL
@@ -4860,7 +4898,7 @@ function postResponse(
     const lpSelfBuiltUrl = lpBedrockMantle
       ? bedrockMantleUrl(config.bedrockRegion)
       : snapshotProtocol === "vertex"
-        ? `https://${config.vertexRegion}-aiplatform.googleapis.com`
+        ? `https://${vertexHost(config.vertexRegion)}`
         : null;
 
     const upstreamSnapshot: UpstreamSnapshot = {
@@ -5753,10 +5791,21 @@ async function handlePassthrough(
   const { response: upstreamResponse, effectiveProtocol } =
     await forwardToUpstream(req, config);
 
+  // Vertex speaks the native Anthropic wire format (Anthropic SSE for streaming
+  // and the native Anthropic JSON shape for non-streaming), so for passthrough
+  // routing it is wire-equivalent to "anthropic". Without this mapping a
+  // streaming meta request (title-gen/summary) on a Vertex session would take
+  // the cross-protocol branch below and get drained through extractJSONFromSSE,
+  // which returns only the last SSE data line ({"type":"message_stop"}) → an
+  // EMPTY response. Collapse vertex→anthropic here so a same-wire client
+  // (anthropic) streams through unchanged.
+  const wireProtocol: typeof effectiveProtocol =
+    effectiveProtocol === "vertex" ? "anthropic" : effectiveProtocol;
+
   // When upstream and client use the same protocol, pass through unchanged.
   // Cross-protocol translation is only needed when provider routing maps
   // to a different protocol (e.g., OpenAI client → Anthropic upstream).
-  if (effectiveProtocol === req.protocol) {
+  if (wireProtocol === req.protocol) {
     if (req.stream && upstreamResponse.body) {
       return new Response(upstreamResponse.body, {
         status: upstreamResponse.status,
@@ -5777,8 +5826,8 @@ async function handlePassthrough(
   // client's wire format (reuses the same translation infrastructure as
   // conversation turns).
   if (req.stream && upstreamResponse.body) {
-    if (effectiveProtocol === "anthropic") {
-      // Anthropic SSE upstream → translate to client's format
+    if (wireProtocol === "anthropic") {
+      // Anthropic SSE upstream (incl. Vertex) → translate to client's format
       const anthropicSSE = new Response(upstreamResponse.body, {
         status: upstreamResponse.status,
         headers: {
@@ -5797,7 +5846,7 @@ async function handlePassthrough(
     // Other cross-protocol streaming combos: accumulate + re-emit
     const resp = await accumulateNonStreamResponse(
       upstreamResponse,
-      effectiveProtocol,
+      wireProtocol,
     );
     return nonStreamHttpResponse(resp, req.protocol, req.stream);
   }
@@ -5805,7 +5854,7 @@ async function handlePassthrough(
   // Non-streaming cross-protocol: accumulate + re-emit
   const resp = await accumulateNonStreamResponse(
     upstreamResponse,
-    effectiveProtocol,
+    wireProtocol,
   );
   return nonStreamHttpResponse(resp, req.protocol, req.stream);
 }
