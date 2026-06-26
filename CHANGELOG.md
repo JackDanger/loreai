@@ -1,4 +1,226 @@
 # Changelog
+## 0.34.0
+
+### New Features ✨
+
+#### Cache Economics
+
+- PR2b — flip warmer + compaction onto unified strategy by @BYK in [#896](https://github.com/BYK/loreai/pull/896)
+- Single evaluator + shadow-mode wiring (no behavior change) by @BYK in [#844](https://github.com/BYK/loreai/pull/844)
+
+#### Cch
+
+- Add seeds for Claude Code up to 2.1.193 by @github-actions in [#1004](https://github.com/BYK/loreai/pull/1004)
+- Add seeds for Claude Code up to 2.1.191 by @github-actions in [#984](https://github.com/BYK/loreai/pull/984)
+- Add seeds for Claude Code up to 2.1.190 by @github-actions in [#978](https://github.com/BYK/loreai/pull/978)
+- Add seeds for Claude Code up to 2.1.187 by @github-actions in [#953](https://github.com/BYK/loreai/pull/953)
+- Add seeds for Claude Code up to 2.1.186 by @github-actions in [#924](https://github.com/BYK/loreai/pull/924)
+- Add seeds for Claude Code up to 2.1.185 by @github-actions in [#865](https://github.com/BYK/loreai/pull/865)
+- Add seeds for Claude Code up to 2.1.183 by @github-actions in [#817](https://github.com/BYK/loreai/pull/817)
+
+#### Core
+
+- Generic off-thread read-RPC pool; route forSession reads (#966) by @BYK in [#1005](https://github.com/BYK/loreai/pull/1005)
+- Measure read-path main-thread blocking to Sentry (#966 B, measure-first) by @BYK in [#993](https://github.com/BYK/loreai/pull/993)
+- Off-thread vector search via read-worker pool (#966) by @BYK in [#989](https://github.com/BYK/loreai/pull/989)
+- Log sqlite-vec native-vs-fallback path at startup by @BYK in [#985](https://github.com/BYK/loreai/pull/985)
+- Native sqlite-vec vector search over BLOB columns with JS fallback by @BYK in [#967](https://github.com/BYK/loreai/pull/967)
+- Route bust-spiral detection to host hook for Sentry alerting (#797) by @BYK in [#951](https://github.com/BYK/loreai/pull/951)
+- Meta-aware cost model for #947 by @BYK in [#950](https://github.com/BYK/loreai/pull/950)
+- Teach curator to capture recurring procedures as runbooks (#914) by @BYK in [#923](https://github.com/BYK/loreai/pull/923)
+- Move knowledge confidence to a knowledge_meta register (A2 sub-PR 3b-1) by @BYK in [#929](https://github.com/BYK/loreai/pull/929)
+- Broaden verifier recall for the outcome-reward loop (#497 follow-up) by @BYK in [#927](https://github.com/BYK/loreai/pull/927)
+- Feed outcome signal into curator consolidation (#497 follow-up) by @BYK in [#921](https://github.com/BYK/loreai/pull/921)
+- Surface knowledge "outcome impact" in lore data show (#497 follow-up) by @BYK in [#906](https://github.com/BYK/loreai/pull/906)
+- Outcome-reward — adjust knowledge confidence by verifier results (#497) by @BYK in [#902](https://github.com/BYK/loreai/pull/902)
+- Flip update()/remove() onto append-only versioning (A2 sub-PR 2b-2b) by @BYK in [#853](https://github.com/BYK/loreai/pull/853)
+- Append-only invariants + partial-mirror obligations (A2 sub-PR 2b-2a) by @BYK in [#850](https://github.com/BYK/loreai/pull/850)
+- Key knowledge cross-references on logical_id (A2 sub-PR 2b-1) by @BYK in [#848](https://github.com/BYK/loreai/pull/848)
+- Route knowledge retrieval reads through knowledge_current (A2 sub-PR 2a) by @BYK in [#847](https://github.com/BYK/loreai/pull/847)
+- Shared cache-economics decision module (no wiring yet) by @BYK in [#842](https://github.com/BYK/loreai/pull/842)
+- Append-only knowledge scaffolding (A2 sub-PR 1) by @BYK in [#839](https://github.com/BYK/loreai/pull/839)
+- Global dead-knowledge sweep across all projects by @BYK in [#820](https://github.com/BYK/loreai/pull/820)
+
+#### Gateway
+
+- Support Claude via Google Vertex AI (#870 part 2) by @BYK in [#987](https://github.com/BYK/loreai/pull/987)
+- Route AWS Bedrock via bedrock-mantle (native Anthropic API) by @BYK in [#935](https://github.com/BYK/loreai/pull/935)
+- Support Claude via AWS Bedrock through the gateway by @BYK in [#898](https://github.com/BYK/loreai/pull/898)
+- `lore doctor` and `lore setup status` by @BYK in [#892](https://github.com/BYK/loreai/pull/892)
+- Harden `lore setup` — liveness, undo, run-first guidance by @BYK in [#876](https://github.com/BYK/loreai/pull/876)
+- `lore start --bg` daemon mode + `lore stop` by @BYK in [#875](https://github.com/BYK/loreai/pull/875)
+- Capture client aborts that coincide with host pressure by @BYK in [#862](https://github.com/BYK/loreai/pull/862)
+- Process resource gauge + startup-backfill span by @BYK in [#860](https://github.com/BYK/loreai/pull/860)
+- Diagnose UNCACHED warmups (expiry vs body divergence) by @BYK in [#838](https://github.com/BYK/loreai/pull/838)
+
+#### Ltm
+
+- Refresh provenance metadata on update/remove (#627 Phase 2) by @BYK in [#986](https://github.com/BYK/loreai/pull/986)
+- Capture gitHead from session-start probe into knowledge.metadata (#627 Phase 1) by @BYK in [#977](https://github.com/BYK/loreai/pull/977)
+
+#### References
+
+- Validate cited code symbols (#911) by @BYK in [#988](https://github.com/BYK/loreai/pull/988)
+- Resolve file refs case-insensitively (#969) by @BYK in [#973](https://github.com/BYK/loreai/pull/973)
+
+#### Sync
+
+- Key the knowledge outbox by logical_id for all ops (#909 prereq) by @BYK in [#913](https://github.com/BYK/loreai/pull/913)
+- Re-key remote knowledge sync on logical_id (A2 sub-PR 3) by @BYK in [#897](https://github.com/BYK/loreai/pull/897)
+- Profiles pull-only mirror + plan-tier resolution (#824) by @BYK in [#828](https://github.com/BYK/loreai/pull/828)
+- Scope seam (author_id/scope_id) + maintained usage counter by @BYK in [#830](https://github.com/BYK/loreai/pull/830)
+
+#### Other
+
+- (idle) PR3 — defer prefix-rewriting idle work on hold-warm sessions (D6′) by @BYK in [#905](https://github.com/BYK/loreai/pull/905)
+- Reference-validity validator (#627 Phase 0) by @BYK in [#939](https://github.com/BYK/loreai/pull/939)
+- Surface budget-overflow knowledge as a recall-by-id ToC (#917) by @BYK in [#930](https://github.com/BYK/loreai/pull/930)
+
+### Bug Fixes 🐛
+
+#### Cache Economics
+
+- Normalize cacheSizeCompressed to cacheSizeFull's input scale by @BYK in [#887](https://github.com/BYK/loreai/pull/887)
+- Source compressed size from the actual rebuilt window (layer ≥ 1) by @BYK in [#883](https://github.com/BYK/loreai/pull/883)
+- Measure large sessions in shadow; review tidy-ups by @BYK in [#846](https://github.com/BYK/loreai/pull/846)
+
+#### Cache Warmer
+
+- Drop stale warmup body when idle distillation rewrites the prefix by @BYK in [#877](https://github.com/BYK/loreai/pull/877)
+- Preserve real cache_control breakpoints in warmup body by @BYK in [#873](https://github.com/BYK/loreai/pull/873)
+
+#### Core
+
+- Emit read-path timing on forSession empty-knowledge fast path by @BYK in [#1014](https://github.com/BYK/loreai/pull/1014)
+- Arm pattern-echo cooldown unconditionally by @BYK in [#1009](https://github.com/BYK/loreai/pull/1009)
+- Cancel timed-out vector worker queries so the pool recovers by @BYK in [#1008](https://github.com/BYK/loreai/pull/1008)
+- Don't re-run vector scan on main thread after pool timeout by @BYK in [#1006](https://github.com/BYK/loreai/pull/1006)
+- Stop distilled-prefix oscillation via stable per-session usable (Bug 1) by @BYK in [#974](https://github.com/BYK/loreai/pull/974)
+- Iterate normalize() to a fixpoint (#959) by @BYK in [#965](https://github.com/BYK/loreai/pull/965)
+- Tighten isCapFit + stop clearing coldStart on recovery (#952) by @BYK in [#957](https://github.com/BYK/loreai/pull/957)
+- Exempt meta-distillation prefix-rewrites from unsustainable warning by @BYK in [#926](https://github.com/BYK/loreai/pull/926)
+- Mark consolidation verifier annotation as optional in prompts (Seer #921) by @BYK in [#922](https://github.com/BYK/loreai/pull/922)
+- Drop outcomeImpact.lastVerdict — inaccurate recency hint (Seer #906) by @BYK in [#919](https://github.com/BYK/loreai/pull/919)
+- Append-only id-resolution + import scoping follow-ups (#823) by @BYK in [#893](https://github.com/BYK/loreai/pull/893)
+- Calibrate embedding cap constants from measured WASM footprint by @BYK in [#867](https://github.com/BYK/loreai/pull/867)
+- Adaptive token cap for local embedding OOM recovery by @BYK in [#855](https://github.com/BYK/loreai/pull/855)
+
+#### Gateway
+
+- Declare @loreai/core as a runtime dependency (#998) by @BYK in [#1024](https://github.com/BYK/loreai/pull/1024)
+- Re-anchor durable delta on compression instead of deleting by @BYK in [#1017](https://github.com/BYK/loreai/pull/1017)
+- Trim mid-session knowledge delta to additive-only by @BYK in [#1013](https://github.com/BYK/loreai/pull/1013)
+- Drop transient upstream network errors from Sentry by @BYK in [#1000](https://github.com/BYK/loreai/pull/1000)
+- Scale 5m warmup margin by prefix size to avoid TTL-race partials by @BYK in [#1002](https://github.com/BYK/loreai/pull/1002)
+- Compute delta nudge against original messages, not mutating out (Bug 2 follow-up) by @BYK in [#982](https://github.com/BYK/loreai/pull/982)
+- Only credit a warmup hit when the returning turn read the cache (Bug C) by @BYK in [#979](https://github.com/BYK/loreai/pull/979)
+- Persist nudged insertAt so steady-layer-1 drift stops recurring (Bug 2) by @BYK in [#976](https://github.com/BYK/loreai/pull/976)
+- Stream recall follow-up for openai-codex (ChatGPT) backend by @BYK in [#968](https://github.com/BYK/loreai/pull/968)
+- Make durable knowledge-delta append-only (cache-stable by construction) by @BYK in [#958](https://github.com/BYK/loreai/pull/958)
+- Trigger durable knowledge-delta on DB mutation, not ranking churn by @BYK in [#954](https://github.com/BYK/loreai/pull/954)
+- Defer prefix rewrites on cool-bust mid-flight (#946) by @BYK in [#949](https://github.com/BYK/loreai/pull/949)
+- Suppress dramatic-drop warn for cool-* cache strategies by @BYK in [#948](https://github.com/BYK/loreai/pull/948)
+- Exempt partial-cache-hit prefix-rewrite busts from unsustainable gate by @BYK in [#943](https://github.com/BYK/loreai/pull/943)
+- Tag the global auth fallback from the upstream URL when header-less (#942) by @BYK in [#944](https://github.com/BYK/loreai/pull/944)
+- Make the global auth fallback provider-aware (#829) by @BYK in [#940](https://github.com/BYK/loreai/pull/940)
+- Bracket IPv6 host literals in handleNodeRequest (#907) by @BYK in [#912](https://github.com/BYK/loreai/pull/912)
+- Probe for an existing gateway before binding (#908) by @BYK in [#920](https://github.com/BYK/loreai/pull/920)
+- Per-model client usage cap + message_delta usage leak by @BYK in [#910](https://github.com/BYK/loreai/pull/910)
+- Tolerate unavailable bind hosts (EADDRNOTAVAIL) by @BYK in [#904](https://github.com/BYK/loreai/pull/904)
+- Probe all interfaces when detecting existing gateway by @BYK in [#903](https://github.com/BYK/loreai/pull/903)
+- Retry provider error envelopes wrapped in HTTP 200 worker responses by @BYK in [#900](https://github.com/BYK/loreai/pull/900)
+- Skip background work when worker model's provider has no credential by @BYK in [#895](https://github.com/BYK/loreai/pull/895)
+- Drain in-flight background work on pipeline reset by @BYK in [#888](https://github.com/BYK/loreai/pull/888)
+- Report UNCACHED warmup bodyBytes in UTF-8 bytes by @BYK in [#841](https://github.com/BYK/loreai/pull/841)
+- Make getCircuitBreakerStatus a pure, decay-safe read by @BYK in [#837](https://github.com/BYK/loreai/pull/837)
+- Scope cache-warmer circuit breaker per (session, model, upstream) by @BYK in [#836](https://github.com/BYK/loreai/pull/836)
+
+#### Ltm
+
+- Purge knowledge_session_injections on knowledge/session delete (#996) by @BYK in [#997](https://github.com/BYK/loreai/pull/997)
+- Purge per-entry validation bookkeeping on knowledge delete (#990) by @BYK in [#994](https://github.com/BYK/loreai/pull/994)
+
+#### Sync
+
+- SeedOutbox re-seeds by content so a stale upsert can't mask an edit by @BYK in [#868](https://github.com/BYK/loreai/pull/868)
+- Reconcile tombstones a deleted row even when a stale upsert outlived it by @BYK in [#866](https://github.com/BYK/loreai/pull/866)
+- Reconcile re-syncs a row recreated across a disable/enable boundary by @BYK in [#861](https://github.com/BYK/loreai/pull/861)
+- A remote tombstone never content-matches "skip" — propagate the delete by @BYK in [#856](https://github.com/BYK/loreai/pull/856)
+
+#### Test
+
+- Scope session-rotation counts by header (proper #859 fix) by @BYK in [#884](https://github.com/BYK/loreai/pull/884)
+- Deflake session-rotation test when X-Lore-Project is absent by @BYK in [#879](https://github.com/BYK/loreai/pull/879)
+
+#### Other
+
+- (gradient) Clamp escalated compression-stage budgets to layer-0 ceiling by @BYK in [#872](https://github.com/BYK/loreai/pull/872)
+- (pi) Migrate to @earendil-works/pi-coding-agent for security fixes by @BYK in [#813](https://github.com/BYK/loreai/pull/813)
+- (vector-pool) Unref the per-request timeout timer (#989 review) by @BYK in [#991](https://github.com/BYK/loreai/pull/991)
+- (website) Make docs links resolve on PR previews + CI guard by @BYK in [#960](https://github.com/BYK/loreai/pull/960)
+- Stop distilled-prefix churn (warming gate + overhead scale fix) by @BYK in [#995](https://github.com/BYK/loreai/pull/995)
+
+### Documentation 📚
+
+#### Website
+
+- Add Mermaid diagrams to architecture page by @BYK in [#777](https://github.com/BYK/loreai/pull/777)
+- "Why memory is not enough" blog post + mobile hamburger nav by @BYK in [#1003](https://github.com/BYK/loreai/pull/1003)
+
+#### Other
+
+- Position .lore.md as git-native, PR-reviewable team memory (#915) by @BYK in [#918](https://github.com/BYK/loreai/pull/918)
+- Fix stale § reference + missing trailing newline (#835 post-merge errata) by @BYK in [#890](https://github.com/BYK/loreai/pull/890)
+- Codify review heuristics & workflow (#835) by @BYK in [#889](https://github.com/BYK/loreai/pull/889)
+
+### Internal Changes 🔧
+
+#### Core
+
+- Resolve project id once in applyOps, not per op by @BYK in [#1021](https://github.com/BYK/loreai/pull/1021)
+- Batch mergeSelfPersonDuplicates alias lookup into one query by @BYK in [#1020](https://github.com/BYK/loreai/pull/1020)
+- Batch entitiesForSession ref-count ranking into one query by @BYK in [#1018](https://github.com/BYK/loreai/pull/1018)
+- Batch + offload recall entity FTS and vector-hit hydration (#966) by @BYK in [#1019](https://github.com/BYK/loreai/pull/1019)
+- Batch dedup_feedback inserts into one transaction by @BYK in [#1015](https://github.com/BYK/loreai/pull/1015)
+- Route recall FTS fan-out off-thread + fix collateral-read main-thread stall (#966) by @BYK in [#1012](https://github.com/BYK/loreai/pull/1012)
+- Batch curator entity-ref sync to load registry once by @BYK in [#1011](https://github.com/BYK/loreai/pull/1011)
+- Cap the temporal vector scan by recency by @BYK in [#1007](https://github.com/BYK/loreai/pull/1007)
+- Materialized per-session rollup for /ui/costs aggregates (#981) by @BYK in [#992](https://github.com/BYK/loreai/pull/992)
+- Cover costs-page token-sum & recent-session aggregates (v58) by @BYK in [#980](https://github.com/BYK/loreai/pull/980)
+- Cover normalize() cap/cycle branches via iterateToFixpoint (#970) by @BYK in [#972](https://github.com/BYK/loreai/pull/972)
+- Index the costs-page assistant-message scan (v56) by @BYK in [#945](https://github.com/BYK/loreai/pull/945)
+- Halve pairwise comparisons in promoteCrossProject by @BYK in [#934](https://github.com/BYK/loreai/pull/934)
+- Reduce CPU spikes from vector search, fetch interceptor, and dedup by @BYK in [#933](https://github.com/BYK/loreai/pull/933)
+- Worker-mock tests for embedding OOM recovery flow by @BYK in [#871](https://github.com/BYK/loreai/pull/871)
+
+#### Gateway
+
+- Bind test servers to port 0 to kill EADDRINUSE flake (closes #931) by @BYK in [#937](https://github.com/BYK/loreai/pull/937)
+- Reduce redundant work in idle scheduler by @BYK in [#936](https://github.com/BYK/loreai/pull/936)
+- Guard pipeline bustCause threading (closes #928) by @BYK in [#932](https://github.com/BYK/loreai/pull/932)
+
+#### Sync
+
+- Make the seedOutbox PRAGMA-count test non-vacuous by @BYK in [#882](https://github.com/BYK/loreai/pull/882)
+- Memoize syncedColumns per connection (kills the push/pull PRAGMA N+1) by @BYK in [#878](https://github.com/BYK/loreai/pull/878)
+- Resolve seedOutbox's synced columns once per table, not per row by @BYK in [#874](https://github.com/BYK/loreai/pull/874)
+- Property/sequence tests for the sync engine state machine (#833) by @BYK in [#852](https://github.com/BYK/loreai/pull/852)
+- RecoverMissingObjects recreates the 3-col outbox index (v52 consistency) by @BYK in [#864](https://github.com/BYK/loreai/pull/864)
+- Index sync_outbox(table_name,row_id,seq) for seedOutbox's latest-op probe by @BYK in [#863](https://github.com/BYK/loreai/pull/863)
+- Close genuine sync-data gaps found by mutation testing (#832) by @BYK in [#851](https://github.com/BYK/loreai/pull/851)
+- AssertSyncInvariants() teardown — continuous invariant enforcement (#834) by @BYK in [#845](https://github.com/BYK/loreai/pull/845)
+- Registry-contract + identity-lifecycle invariant batteries by @BYK in [#831](https://github.com/BYK/loreai/pull/831)
+
+#### Other
+
+- (cache-economics) Prove evaluateCacheStrategy is scale-unbiased (#886) by @BYK in [#891](https://github.com/BYK/loreai/pull/891)
+- (cache-warmer) Cover shouldWarm Phase B continuation (PR #896 coverage) by @BYK in [#901](https://github.com/BYK/loreai/pull/901)
+- (deps-dev) Bump undici from 7.27.2 to 7.28.0 in the npm_and_yarn group across 1 directory by @dependabot in [#819](https://github.com/BYK/loreai/pull/819)
+- (gradient) Harden layer-1 clamp guard (adversarial review follow-up to #872) by @BYK in [#880](https://github.com/BYK/loreai/pull/880)
+- (references) Guard Windows backslash path normalization by @BYK in [#971](https://github.com/BYK/loreai/pull/971)
+- (test) Stryker mutation testing on the sync modules (#832) by @BYK in [#840](https://github.com/BYK/loreai/pull/840)
+- Wire check-preview-links into ci-status (PR #960 follow-up) by @BYK in [#975](https://github.com/BYK/loreai/pull/975)
+
 ## 0.33.0
 
 ### New Features ✨
