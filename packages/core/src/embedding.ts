@@ -44,7 +44,7 @@ import {
   type VectorHit,
   type VectorQuerySpec,
 } from "./vector-query";
-import { tryPoolVectorSearch } from "./vector-pool";
+import { tryPoolVectorSearch, VECTOR_SEARCH_TIMED_OUT } from "./vector-pool";
 
 // The cosine/BLOB helpers moved to ./vector-query (a leaf module the read
 // worker can import without pulling in the provider chain). Re-exported here so
@@ -1266,13 +1266,21 @@ export function l2Normalize(vec: Float32Array): Float32Array {
 /**
  * Run `spec` on the read-worker pool when it's enabled and healthy (off the
  * main event loop), otherwise synchronously in-process. The pool call never
- * throws — it returns null when unavailable so we transparently fall back.
+ * throws: it returns null when unavailable (disabled/broken/errored) so we
+ * transparently fall back in-process, or the VECTOR_SEARCH_TIMED_OUT sentinel
+ * when the worker is alive but slow — in which case we return an empty result
+ * rather than re-running the scan on the main thread.
  */
 async function poolOrInProcess(
   spec: VectorQuerySpec,
   queryEmbedding: Float32Array,
 ): Promise<VectorHit[] | DistillationVectorHit[]> {
   const pooled = await tryPoolVectorSearch(spec, queryEmbedding);
+  // Timed out: the worker is alive but slow. Return empty — degrading this one
+  // recall — rather than re-running the O(n) scan on the main thread, which
+  // re-blocks the event loop (the stall bug). Worker-query cancellation and a
+  // recency cap on the scan land in follow-up PRs.
+  if (pooled === VECTOR_SEARCH_TIMED_OUT) return [];
   if (pooled !== null) return pooled;
   return runVectorQuery(db(), isVecAvailable(), queryEmbedding, spec);
 }

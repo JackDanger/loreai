@@ -5,6 +5,8 @@ import {
   _setTestVectorWorkerFactory,
   shutdownVectorPool,
   tryPoolVectorSearch,
+  VECTOR_SEARCH_TIMED_OUT,
+  vectorSearchTimeoutMs,
 } from "../src/vector-pool";
 import type {
   VectorWorkerInbound,
@@ -70,6 +72,7 @@ afterEach(() => {
   _setTestVectorWorkerFactory(null);
   _resetVectorPoolForTest();
   delete process.env.LORE_DISABLE_VEC_WORKER;
+  delete process.env.LORE_VEC_SEARCH_TIMEOUT_MS;
   vi.useRealTimers();
 });
 
@@ -109,6 +112,40 @@ describe("vector-pool kill switch / disable", () => {
   });
 });
 
+describe("vectorSearchTimeoutMs env override", () => {
+  const DEFAULT_MS = 10_000;
+
+  it("uses the 10s default when unset", () => {
+    delete process.env.LORE_VEC_SEARCH_TIMEOUT_MS;
+    expect(vectorSearchTimeoutMs()).toBe(DEFAULT_MS);
+  });
+
+  it("honors a valid positive integer override", () => {
+    process.env.LORE_VEC_SEARCH_TIMEOUT_MS = "2500";
+    expect(vectorSearchTimeoutMs()).toBe(2500);
+  });
+
+  it("floors a fractional value", () => {
+    process.env.LORE_VEC_SEARCH_TIMEOUT_MS = "100.9";
+    expect(vectorSearchTimeoutMs()).toBe(100);
+  });
+
+  it.each([
+    "abc",
+    "",
+    "  ",
+    "0",
+    "-5",
+    "Infinity",
+    "NaN",
+  ])("ignores invalid/non-positive value %j and falls back to the default", (raw) => {
+    // Guards the setTimeout(Infinity)/NaN foot-gun: a bad value must never
+    // arm a never-firing (or immediately-firing) timer.
+    process.env.LORE_VEC_SEARCH_TIMEOUT_MS = raw;
+    expect(vectorSearchTimeoutMs()).toBe(DEFAULT_MS);
+  });
+});
+
 describe("vector-pool fallback paths (resolve null, never throw)", () => {
   it("returns null when the worker reports a per-request error", async () => {
     _setTestVectorWorkerFactory(
@@ -117,12 +154,16 @@ describe("vector-pool fallback paths (resolve null, never throw)", () => {
     expect(await tryPoolVectorSearch(KNOWLEDGE, QUERY)).toBeNull();
   });
 
-  it("returns null when the worker never replies (timeout)", async () => {
+  it("resolves the timeout sentinel (NOT null) when the worker never replies", async () => {
+    // The sentinel is what tells the caller "the worker is slow — return empty,
+    // don't re-run the scan in-process". Asserting the sentinel (not null) is
+    // the non-vacuous guard: pre-fix the timeout rejected → caught → null, so
+    // this would fail. (null is reserved for pool disabled/broken/errored.)
     vi.useFakeTimers();
     _setTestVectorWorkerFactory(factoryReturning(() => {}));
     const p = tryPoolVectorSearch(KNOWLEDGE, QUERY);
-    await vi.advanceTimersByTimeAsync(5_001);
-    expect(await p).toBeNull();
+    await vi.advanceTimersByTimeAsync(vectorSearchTimeoutMs() + 1);
+    expect(await p).toBe(VECTOR_SEARCH_TIMED_OUT);
   });
 
   it("returns null and latches broken when spawning throws (no retry)", async () => {
@@ -215,7 +256,7 @@ describe("vector-pool structural-failure latch (review #989)", () => {
   });
 
   it("unref()'s the per-request timeout timer so a pending search can't delay exit", async () => {
-    // The actual review-#989 bug: the 5 s timeout timer was ref'd, so an
+    // The actual review-#989 bug: the per-request timeout timer was ref'd, so an
     // in-flight search would hold the event loop open on shutdown even though
     // the worker is unref'd. Spy on the real timer object's unref() — asserting
     // it's called is the only non-vacuous check (removing the source line fails
@@ -248,7 +289,7 @@ describe("vector-pool structural-failure latch (review #989)", () => {
   it("treats a worker init-error message as a structural death", async () => {
     // A reader connection that fails to open surfaces as an init-error message,
     // marking the worker structurally dead. Asserting only null would be vacuous
-    // (the 5s timeout fallback also resolves null); instead assert the dead
+    // (the timeout fallback also resolves the sentinel); instead assert the dead
     // worker is terminated on the next ensurePool — a side effect the timeout
     // path never produces. Pre-fix mutation (init-error → no markDead): the
     // victim stays alive and this fails.
@@ -280,7 +321,7 @@ describe("vector-pool structural-failure latch (review #989)", () => {
 
   it("clears the timer when postMessage throws (no leaked timer)", async () => {
     // A throw in the Promise executor rejects regardless, so asserting null is
-    // vacuous — the actual S2 bug is the 5 s ref'd timer left armed. Assert it
+    // vacuous — the actual S2 bug is the per-request ref'd timer left armed. Assert it
     // was cleared (pre-fix: 1 leaked timer; post-fix: 0).
     vi.useFakeTimers();
     _setTestVectorWorkerFactory((() => {
@@ -306,5 +347,27 @@ describe("embedding.vectorSearch routes through the pool", () => {
     const { vectorSearch } = await import("../src/embedding");
     const hits = await vectorSearch(QUERY, 5);
     expect(hits).toEqual([{ id: "via-pool", similarity: 0.42 }]);
+  });
+
+  it("returns empty on pool timeout and does NOT re-run the scan in-process", async () => {
+    // The stall bug: on a pool timeout the consumer used to fall back to the
+    // synchronous O(n) scan on the main thread. Spy on the in-process query so
+    // the guard is non-vacuous — pre-fix this spy WOULD be called (and its
+    // result returned); post-fix the consumer returns [] without touching it.
+    const vq = await import("../src/vector-query");
+    const { vectorSearch } = await import("../src/embedding");
+    const spy = vi
+      .spyOn(vq, "runVectorQuery")
+      .mockReturnValue([{ id: "IN-PROCESS", similarity: 1 }]);
+    try {
+      _setTestVectorWorkerFactory(factoryReturning(() => {})); // never replies
+      vi.useFakeTimers();
+      const p = vectorSearch(QUERY, 5);
+      await vi.advanceTimersByTimeAsync(vectorSearchTimeoutMs() + 1);
+      expect(await p).toEqual([]);
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
