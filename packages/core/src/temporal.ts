@@ -2,6 +2,7 @@ import { db, ensureProject } from "./db";
 import { runRelaxedSearch, runRelaxedSearchAsync } from "./search";
 import { offloadAllOrTimeout, READ_JOB_TIMED_OUT } from "./read-offload";
 import { sanitizeSurrogates } from "./markdown";
+import * as log from "./log";
 import * as embedding from "./embedding";
 import {
   classifyToolError,
@@ -684,84 +685,182 @@ export type PruneResult = {
  * until under the cap.
  *
  * Invariant: undistilled messages (distilled=0) are NEVER deleted by either pass.
+ *
+ * Resilience (#1001): the active `db()` connection is reset/rebuilt several
+ * times per process run (overflow-recovery / split / magnet maintenance) and an
+ * idle prune can race that window, observing a connection where a table is
+ * momentarily absent (`SQLiteError: no such table: distillations`). The
+ * connection/project setup and each pass are therefore wrapped so a
+ * *missing-object* error is a no-op for that tick (the next idle tick reruns it)
+ * instead of aborting the remaining passes. Any other error still propagates to
+ * the caller. A *persistent* run of such skips (>= MISSING_OBJECT_ESCALATE_TICKS
+ * consecutive ticks) escalates from info to warn, since a sustained miss points
+ * at a real schema problem rather than a transient swap. Root-causing/serializing
+ * the swap itself and recovering missing base tables are tracked follow-ups.
  */
 export function prune(input: {
   projectPath: string;
   retentionDays: number;
   maxStorageMB: number;
 }): PruneResult {
-  const database = db();
-  const pid = ensureProject(input.projectPath);
+  // Resolving the connection and project row can itself race the swap window
+  // (e.g. `no such table: projects` from ensureProject's lookup); treat that the
+  // same as a per-pass miss — skip this tick and let the next one retry (#1001).
+  let database: ReturnType<typeof db>;
+  let pid: string;
+  try {
+    database = db();
+    pid = ensureProject(input.projectPath);
+  } catch (e) {
+    if (!isMissingObjectError(e)) throw e;
+    log.info(
+      "temporal.prune setup (db/ensureProject) skipped — object missing during db maintenance window (transient):",
+      e,
+    );
+    noteMissingObjectTick();
+    return { ttlDeleted: 0, capDeleted: 0 };
+  }
   const cutoff = Date.now() - input.retentionDays * 24 * 60 * 60 * 1000;
+  // Tracks whether any pass skipped on a missing object this tick, so a sustained
+  // run of skips can escalate from info to warn (see noteMissingObjectTick).
+  let sawMissingObject = false;
 
   // Pass 1: TTL — delete distilled messages older than the retention window.
   // Note: result.changes is inflated by FTS trigger side-effects, so we count
   // eligible rows before deletion to get the accurate number deleted.
-  const ttlEligible = (
-    database
-      .query(
-        "SELECT COUNT(*) as c FROM temporal_messages WHERE project_id = ? AND distilled = 1 AND created_at < ?",
-      )
-      .get(pid, cutoff) as { c: number }
-  ).c;
-  if (ttlEligible > 0) {
-    database
-      .query(
-        "DELETE FROM temporal_messages WHERE project_id = ? AND distilled = 1 AND created_at < ?",
-      )
-      .run(pid, cutoff);
+  let ttlDeleted = 0;
+  try {
+    const ttlEligible = (
+      database
+        .query(
+          "SELECT COUNT(*) as c FROM temporal_messages WHERE project_id = ? AND distilled = 1 AND created_at < ?",
+        )
+        .get(pid, cutoff) as { c: number }
+    ).c;
+    if (ttlEligible > 0) {
+      database
+        .query(
+          "DELETE FROM temporal_messages WHERE project_id = ? AND distilled = 1 AND created_at < ?",
+        )
+        .run(pid, cutoff);
+    }
+    ttlDeleted = ttlEligible;
+  } catch (e) {
+    if (!isMissingObjectError(e)) throw e;
+    sawMissingObject = true;
+    log.info(
+      "temporal.prune Pass 1 (TTL) skipped — object missing during db maintenance window (transient):",
+      e,
+    );
   }
-  const ttlDeleted = ttlEligible;
 
   // Pass 2: Size cap — check if total storage for this project exceeds the
   // limit and if so, evict the oldest distilled messages until under the cap.
-  const maxBytes = input.maxStorageMB * 1024 * 1024;
-  const totalBytes =
-    (
-      database
-        .query(
-          "SELECT SUM(LENGTH(content)) as b FROM temporal_messages WHERE project_id = ?",
-        )
-        .get(pid) as { b: number | null }
-    ).b ?? 0;
-
   let capDeleted = 0;
-  if (totalBytes > maxBytes) {
-    // Collect oldest distilled messages until we've accounted for enough bytes
-    // to drop below the cap. Delete them in a single batch.
-    const candidates = database
-      .query(
-        "SELECT id, LENGTH(content) as size FROM temporal_messages WHERE project_id = ? AND distilled = 1 ORDER BY created_at ASC",
-      )
-      .all(pid) as { id: string; size: number }[];
+  try {
+    const maxBytes = input.maxStorageMB * 1024 * 1024;
+    const totalBytes =
+      (
+        database
+          .query(
+            "SELECT SUM(LENGTH(content)) as b FROM temporal_messages WHERE project_id = ?",
+          )
+          .get(pid) as { b: number | null }
+      ).b ?? 0;
 
-    const toDelete: string[] = [];
-    let freed = 0;
-    const excess = totalBytes - maxBytes;
-    for (const row of candidates) {
-      if (freed >= excess) break;
-      toDelete.push(row.id);
-      freed += row.size;
-    }
+    if (totalBytes > maxBytes) {
+      // Collect oldest distilled messages until we've accounted for enough bytes
+      // to drop below the cap. Delete them in a single batch.
+      const candidates = database
+        .query(
+          "SELECT id, LENGTH(content) as size FROM temporal_messages WHERE project_id = ? AND distilled = 1 ORDER BY created_at ASC",
+        )
+        .all(pid) as { id: string; size: number }[];
 
-    if (toDelete.length) {
-      const placeholders = toDelete.map(() => "?").join(",");
-      database
-        .query(`DELETE FROM temporal_messages WHERE id IN (${placeholders})`)
-        .run(...toDelete);
-      // toDelete.length is the accurate count — result.changes is inflated by FTS triggers.
-      capDeleted = toDelete.length;
+      const toDelete: string[] = [];
+      let freed = 0;
+      const excess = totalBytes - maxBytes;
+      for (const row of candidates) {
+        if (freed >= excess) break;
+        toDelete.push(row.id);
+        freed += row.size;
+      }
+
+      if (toDelete.length) {
+        const placeholders = toDelete.map(() => "?").join(",");
+        database
+          .query(`DELETE FROM temporal_messages WHERE id IN (${placeholders})`)
+          .run(...toDelete);
+        // toDelete.length is the accurate count — result.changes is inflated by FTS triggers.
+        capDeleted = toDelete.length;
+      }
     }
+  } catch (e) {
+    if (!isMissingObjectError(e)) throw e;
+    sawMissingObject = true;
+    log.info(
+      "temporal.prune Pass 2 (size cap) skipped — object missing during db maintenance window (transient):",
+      e,
+    );
   }
 
   // Pass 3: Prune archived distillations older than the retention window.
   // Archived gen-0 distillations are kept for recall search but don't need
   // to live forever — they follow the same retention policy as temporal messages.
-  database
-    .query(
-      "DELETE FROM distillations WHERE project_id = ? AND archived = 1 AND created_at < ?",
-    )
-    .run(pid, cutoff);
+  try {
+    database
+      .query(
+        "DELETE FROM distillations WHERE project_id = ? AND archived = 1 AND created_at < ?",
+      )
+      .run(pid, cutoff);
+  } catch (e) {
+    if (!isMissingObjectError(e)) throw e;
+    sawMissingObject = true;
+    log.info(
+      "temporal.prune Pass 3 (archived distillations) skipped — object missing during db maintenance window (transient):",
+      e,
+    );
+  }
 
+  // A clean tick (no missing-object skip) clears the consecutive-skip streak so
+  // only a *sustained* run of skips escalates to warn.
+  if (sawMissingObject) noteMissingObjectTick();
+  else consecutiveMissingObjectSkipTicks = 0;
   return { ttlDeleted, capDeleted };
+}
+
+/**
+ * True when a thrown DB error is a transient missing-object error (`no such
+ * table` / `no such column`), the symptom of racing a `db()` reset/rebuild
+ * maintenance window (#1001). Such errors are swallowed per-pass in `prune()`;
+ * everything else propagates.
+ */
+function isMissingObjectError(err: unknown): boolean {
+  return err instanceof Error && /no such (table|column)/i.test(err.message);
+}
+
+/**
+ * Number of consecutive prune() ticks that skipped one or more passes on a
+ * missing object before we escalate from info to warn. A single skip is the
+ * expected, benign symptom of racing a db() maintenance swap (#1001); a sustained
+ * run instead points at a persistent schema problem (a dropped/renamed object,
+ * an un-run migration) that would otherwise let prune silently no-op forever
+ * while temporal storage grows past its cap.
+ */
+const MISSING_OBJECT_ESCALATE_TICKS = 3;
+let consecutiveMissingObjectSkipTicks = 0;
+
+/**
+ * Record a prune() tick that skipped at least one pass on a missing object,
+ * escalating from info to warn once the skip becomes persistent rather than
+ * transient. Called at most once per prune() tick.
+ */
+function noteMissingObjectTick(): void {
+  consecutiveMissingObjectSkipTicks++;
+  if (consecutiveMissingObjectSkipTicks >= MISSING_OBJECT_ESCALATE_TICKS) {
+    log.warn(
+      `temporal.prune has skipped passes on missing DB objects for ${consecutiveMissingObjectSkipTicks} consecutive ticks — ` +
+        "expected briefly during db() maintenance swaps, but a sustained recurrence indicates a persistent schema problem (#1001).",
+    );
+  }
 }
