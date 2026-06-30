@@ -18,6 +18,7 @@ import { createServer as createHttpServer } from "node:http";
 import type { Server } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
+import { log } from "@loreai/core";
 import { DEFAULT_PORT, type GatewayConfig } from "./config";
 import { bootstrapDailySpend, getDailyBudget } from "./cost-tracker";
 import {
@@ -178,7 +179,7 @@ async function handleAnthropicMessages(
     return withCors(result);
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Pipeline error";
-    console.error(`[lore] pipeline error: ${msg}`);
+    log.error(`pipeline error: ${msg}`);
     return errorResponse(502, "api_error", `Gateway pipeline error: ${msg}`);
   }
 }
@@ -262,7 +263,7 @@ async function handleOpenAIChatCompletions(
     return withCors(await handleRequest(gatewayReq, config));
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Pipeline error";
-    console.error(`[lore] pipeline error: ${msg}`);
+    log.error(`pipeline error: ${msg}`);
     return errorResponse(502, "api_error", `Gateway pipeline error: ${msg}`);
   }
 }
@@ -298,7 +299,7 @@ async function handleOpenAIResponses(
     return withCors(await handleRequest(gatewayReq, config));
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Pipeline error";
-    console.error(`[lore] pipeline error: ${msg}`);
+    log.error(`pipeline error: ${msg}`);
     return errorResponse(502, "api_error", `Gateway pipeline error: ${msg}`);
   }
 }
@@ -335,7 +336,7 @@ async function handleOpenAICodexResponses(
     return withCors(await handleRequest(gatewayReq, config));
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Pipeline error";
-    console.error(`[lore] pipeline error: ${msg}`);
+    log.error(`pipeline error: ${msg}`);
     return errorResponse(502, "api_error", `Gateway pipeline error: ${msg}`);
   }
 }
@@ -355,8 +356,8 @@ export async function startServer(config: GatewayConfig): Promise<{
   // loadConfig() always provides these, but startServer is a public export.
   config = config ?? ({} as GatewayConfig);
   if (!config.hosts?.length) {
-    console.error(
-      `[lore] warning: config.hosts is empty or missing, defaulting to ["127.0.0.1"]. ` +
+    log.notice(
+      `warning: config.hosts is empty or missing, defaulting to ["127.0.0.1"]. ` +
         `Use loadConfig() or startGateway() for a fully-populated config.`,
     );
     config = { ...config, hosts: ["127.0.0.1"] };
@@ -393,7 +394,7 @@ export async function startServer(config: GatewayConfig): Promise<{
       return withCors(new Response(null, { status: 204 }));
     }
 
-    if (config.debug) {
+    if (config.debug && !log.isStderrSilenced()) {
       console.error(`[lore] ${method} ${pathname}`);
     }
 
@@ -402,7 +403,7 @@ export async function startServer(config: GatewayConfig): Promise<{
     // definitively rather than returning a misleading 404 (which caused
     // repeated upgrade attempts and noisy logs).
     if (isWebSocketUpgrade(req)) {
-      if (config.debug) {
+      if (config.debug && !log.isStderrSilenced()) {
         console.error(
           `[lore] rejecting WebSocket upgrade for ${pathname} (HTTP-only gateway)`,
         );
@@ -505,7 +506,7 @@ export async function startServer(config: GatewayConfig): Promise<{
       );
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Internal server error";
-      console.error(`[lore] uncaught error: ${msg}`);
+      log.error(`uncaught error: ${msg}`);
       return errorResponse(500, "api_error", msg);
     }
   };
@@ -539,7 +540,7 @@ export async function startServer(config: GatewayConfig): Promise<{
       // install a dedicated listener that writes a 426 + closes the socket.
       // Mirrors the `isWebSocketUpgrade` rejection in the fetch handler.
       s.on("upgrade", (req, socket) => {
-        if (config.debug) {
+        if (config.debug && !log.isStderrSilenced()) {
           console.error(
             `[lore] rejecting WebSocket upgrade for ${req.url ?? "/"} (HTTP-only gateway)`,
           );
@@ -590,8 +591,8 @@ export async function startServer(config: GatewayConfig): Promise<{
           // Always warn (not just in debug): silently degrading to loopback-only
           // when an explicitly-configured host is dropped is surprising, and the
           // event is low-frequency and actionable.
-          console.error(
-            `[lore] configured host ${host} is unavailable (${addressErrorCode(e)}); skipping it and serving on the remaining hosts`,
+          log.notice(
+            `configured host ${host} is unavailable (${addressErrorCode(e)}); skipping it and serving on the remaining hosts`,
           );
           continue;
         }
@@ -794,7 +795,7 @@ async function handleNodeRequest(
     }
     nodeRes.end();
   } catch (err) {
-    console.error("[lore] request handler error:", err);
+    log.error("request handler error:", err);
     if (!nodeRes.headersSent) {
       nodeRes.writeHead(500, { "content-type": "application/json" });
     }

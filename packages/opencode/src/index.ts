@@ -10,7 +10,11 @@ import {
 // exported from the entry module as a plugin; leaking these helpers pushed
 // `undefined` into the host hooks array and crashed it on event dispatch
 // (`undefined is not an object (evaluating 'A.event')`). See ./internal.ts.
-import { applyLoreProviderConfig, probeGateway } from "./internal";
+import {
+  applyLoreProviderConfig,
+  probeGateway,
+  surfaceGatewayUnavailable,
+} from "./internal";
 
 /**
  * Lore plugin for OpenCode — transparent LLM proxy routing.
@@ -190,6 +194,15 @@ export const LorePlugin: Plugin = async (ctx) => {
   if (!processInitDone) {
     const inTestEnv = isInertTestEnv();
 
+    // We're loaded by a real OpenCode process, which owns a full-screen TUI:
+    // any byte on stdout/stderr corrupts the render. Flip the core logger's
+    // process-global silence flag — which the in-process gateway's own (bundled)
+    // copy of `core` reads off `globalThis` too — so NOTHING (not even
+    // `log.error` or gateway warnings) reaches the terminal. Everything still
+    // lands in the log file + Sentry sink (`lore logs`). Skipped under inert
+    // test mode so unrelated suites keep their console.
+    if (!inTestEnv) log.silenceStderr();
+
     if (!loreDisabled && !inTestEnv) {
       // Memoize so concurrent LorePlugin calls don't race on probe→spawn.
       if (!loreInitPromise) {
@@ -234,8 +247,10 @@ export const LorePlugin: Plugin = async (ctx) => {
               " (or `run build` for a dev checkout)."
             : "")
         : `${base} Ensure @loreai/gateway is installed.`;
-      process.stderr.write(`[lore] ERROR: ${msg}\n`);
-      log.error(msg);
+      // `log.error` is silenced on stderr in embedded/TUI mode, so it alone is
+      // invisible to a user in the OpenCode TUI. Also raise a TUI-safe toast so
+      // a totally-failed gateway isn't a silent no-op (Daniel's Windows report).
+      surfaceGatewayUnavailable(ctx.client, msg);
     }
   }
 
@@ -376,13 +391,12 @@ export const LorePlugin: Plugin = async (ctx) => {
       },
     };
 
-    // Startup banner — visible in stderr so silent failures are obvious.
-    // Suppressed in test env to keep vitest output clean.
+    // Startup banner. Routed through `log` (file + sink, stderr only when not
+    // silenced) — NEVER a raw stderr write: OpenCode owns a full-screen TUI and
+    // any stray byte corrupts it. Visible via `lore logs`.
     if (!processInitDone) {
       const projectPath = discoverWorkspaceRoot(ctx.worktree || ctx.directory);
-      if (process.env.NODE_ENV !== "test") {
-        process.stderr.write(`[lore] active: ${projectPath}\n`);
-      }
+      log.info(`active: ${projectPath}`);
 
       if (loreActive) {
         // Install the fetch interceptor once per process. It transparently
@@ -402,12 +416,8 @@ export const LorePlugin: Plugin = async (ctx) => {
             return headers;
           },
         });
-        // Suppressed in test env (mirrors the `[lore] active:` banner above)
-        // so the force-active e2e path doesn't pollute vitest output.
-        if (process.env.NODE_ENV !== "test") {
-          process.stderr.write(`[lore] routing through ${gatewayBase}\n`);
-          process.stderr.write(`[lore] dashboard: ${gatewayBase}/ui\n`);
-        }
+        log.info(`routing through ${gatewayBase}`);
+        log.info(`dashboard: ${gatewayBase}/ui`);
       }
 
       processInitDone = true;
@@ -417,8 +427,10 @@ export const LorePlugin: Plugin = async (ctx) => {
   } catch (e) {
     // Log the full error before re-throwing so OpenCode's plugin loader
     // (which catches and swallows the error) doesn't hide the root cause.
+    // `log.error` captures it to the file + Sentry sink even when stderr is
+    // silenced for the TUI, so the cause survives in `lore logs`.
     const detail = e instanceof Error ? e.stack || e.message : String(e);
-    process.stderr.write(`[lore] init failed: ${detail}\n`);
+    log.error(`init failed: ${detail}`);
     throw e;
   }
 };
