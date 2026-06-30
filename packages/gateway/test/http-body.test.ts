@@ -15,11 +15,14 @@ import {
   zstdDecompressSync,
 } from "node:zlib";
 import {
+  buildUpstreamRouteContext,
   compressBody,
   decodeRequestBody,
   decompressBody,
   encodeUpstreamBody,
+  encodeUpstreamBodyForRoute,
   isSupportedEncoding,
+  mayReencodeUpstream,
   normalizeRequestEncoding,
 } from "../src/http-body";
 
@@ -167,5 +170,186 @@ describe("encodeUpstreamBody", () => {
       body: SAMPLE,
       contentEncoding: null,
     });
+  });
+});
+
+describe("mayReencodeUpstream", () => {
+  test("permits re-encoding on a native passthrough (no overrides, same protocol)", () => {
+    // The Codex native path: openai-responses in, openai-responses out, with an
+    // explicit X-Lore-Provider (openai-codex) — and also the bare same-protocol
+    // case. Both are trusted destinations.
+    expect(
+      mayReencodeUpstream({
+        hasUpstreamUrlOverride: false,
+        hasProviderOverride: false,
+        ingressProtocol: "openai-responses",
+        effectiveProtocol: "openai-responses",
+      }),
+    ).toBe(true);
+  });
+
+  test("permits re-encoding when X-Lore-Provider is set even if the protocol is translated", () => {
+    // Explicit provider override → the user/plugin chose the destination, so we
+    // trust it accepts the client's encoding (e.g. Codex → openai-codex).
+    expect(
+      mayReencodeUpstream({
+        hasUpstreamUrlOverride: false,
+        hasProviderOverride: true,
+        ingressProtocol: "anthropic",
+        effectiveProtocol: "openai",
+      }),
+    ).toBe(true);
+  });
+
+  test("permits re-encoding when X-Lore-Upstream-URL is set even if the protocol is translated", () => {
+    // Explicit URL override → the user owns the destination.
+    expect(
+      mayReencodeUpstream({
+        hasUpstreamUrlOverride: true,
+        hasProviderOverride: false,
+        ingressProtocol: "anthropic",
+        effectiveProtocol: "openai",
+      }),
+    ).toBe(true);
+  });
+
+  test("withholds re-encoding when the gateway auto-translates with no explicit destination", () => {
+    // Bare Anthropic client whose model-prefix route resolves to an OpenAI
+    // backend: the gateway re-routed to a different provider family the client
+    // never targeted — its Content-Encoding may not be accepted there.
+    expect(
+      mayReencodeUpstream({
+        hasUpstreamUrlOverride: false,
+        hasProviderOverride: false,
+        ingressProtocol: "anthropic",
+        effectiveProtocol: "openai",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("buildUpstreamRouteContext", () => {
+  test("derives hasUpstreamUrlOverride from header truthiness", () => {
+    expect(
+      buildUpstreamRouteContext("https://up.example", null, "a", "b")
+        .hasUpstreamUrlOverride,
+    ).toBe(true);
+    for (const empty of [null, undefined, ""]) {
+      expect(
+        buildUpstreamRouteContext(empty, null, "a", "b").hasUpstreamUrlOverride,
+      ).toBe(false);
+    }
+  });
+
+  test("derives hasProviderOverride from header truthiness", () => {
+    expect(
+      buildUpstreamRouteContext(null, "openai-codex", "a", "b")
+        .hasProviderOverride,
+    ).toBe(true);
+    for (const empty of [null, undefined, ""]) {
+      expect(
+        buildUpstreamRouteContext(null, empty, "a", "b").hasProviderOverride,
+      ).toBe(false);
+    }
+  });
+
+  test("maps ingress/effective protocols to the right fields (not swapped)", () => {
+    // Distinct sentinel values catch an ingress/effective swap — the exact
+    // mis-wiring that would silently disable the auto-cross-route guard.
+    const ctx = buildUpstreamRouteContext(null, null, "INGRESS", "EFFECTIVE");
+    expect(ctx.ingressProtocol).toBe("INGRESS");
+    expect(ctx.effectiveProtocol).toBe("EFFECTIVE");
+  });
+
+  test("composes with mayReencodeUpstream into the full route truth table", () => {
+    // Lock the raw-inputs → decision path end to end (the wiring the call site
+    // depends on), not just the boolean already-derived context.
+    const decide = (
+      url: string | null,
+      provider: string | null,
+      ingress: string,
+      effective: string,
+    ) =>
+      mayReencodeUpstream(
+        buildUpstreamRouteContext(url, provider, ingress, effective),
+      );
+    // Auto cross-route (no overrides, protocol translated) → distrust.
+    expect(decide(null, null, "anthropic", "openai")).toBe(false);
+    // Native passthrough (no overrides, same protocol) → trust.
+    expect(decide(null, null, "openai-responses", "openai-responses")).toBe(
+      true,
+    );
+    // Explicit URL override, even when translated → trust.
+    expect(decide("https://up.example", null, "anthropic", "openai")).toBe(
+      true,
+    );
+    // Explicit provider override (real Codex path), even translated → trust.
+    expect(decide(null, "openai-codex", "anthropic", "openai")).toBe(true);
+  });
+});
+
+describe("encodeUpstreamBodyForRoute", () => {
+  const NATIVE = {
+    hasUpstreamUrlOverride: false,
+    hasProviderOverride: false,
+    ingressProtocol: "openai-responses",
+    effectiveProtocol: "openai-responses",
+  };
+  const AUTO_CROSS_ROUTED = {
+    hasUpstreamUrlOverride: false,
+    hasProviderOverride: false,
+    ingressProtocol: "anthropic",
+    effectiveProtocol: "openai",
+  };
+  const EXPLICIT_URL_TRANSLATED = {
+    hasUpstreamUrlOverride: true,
+    hasProviderOverride: false,
+    ingressProtocol: "anthropic",
+    effectiveProtocol: "openai",
+  };
+
+  test("re-applies the client's encoding on a trusted (native) route", () => {
+    const { body, contentEncoding } = encodeUpstreamBodyForRoute(
+      SAMPLE,
+      "zstd",
+      NATIVE,
+    );
+    expect(contentEncoding).toBe("zstd");
+    expect(zstdDecompressSync(body as Uint8Array).toString("utf8")).toBe(
+      SAMPLE,
+    );
+  });
+
+  test("re-applies the client's encoding on an explicit URL override (even when translated)", () => {
+    const { body, contentEncoding } = encodeUpstreamBodyForRoute(
+      SAMPLE,
+      "zstd",
+      EXPLICIT_URL_TRANSLATED,
+    );
+    expect(contentEncoding).toBe("zstd");
+    expect(zstdDecompressSync(body as Uint8Array).toString("utf8")).toBe(
+      SAMPLE,
+    );
+  });
+
+  test("forwards UNCOMPRESSED when the gateway auto-cross-routes", () => {
+    // The mismatch guard: a compressing client auto-translated to a provider it
+    // never targeted must NOT have its Content-Encoding replayed upstream.
+    expect(
+      encodeUpstreamBodyForRoute(SAMPLE, "zstd", AUTO_CROSS_ROUTED),
+    ).toEqual({ body: SAMPLE, contentEncoding: null });
+  });
+
+  test("forwards uncompressed on any route when the client sent no encoding", () => {
+    expect(encodeUpstreamBodyForRoute(SAMPLE, null, NATIVE)).toEqual({
+      body: SAMPLE,
+      contentEncoding: null,
+    });
+    expect(encodeUpstreamBodyForRoute(SAMPLE, null, AUTO_CROSS_ROUTED)).toEqual(
+      {
+        body: SAMPLE,
+        contentEncoding: null,
+      },
+    );
   });
 });

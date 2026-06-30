@@ -290,7 +290,11 @@ import {
   deserializeRecallStore,
 } from "./recall";
 import { upstreamFetch } from "./fetch";
-import { decodeRequestBody, encodeUpstreamBody } from "./http-body";
+import {
+  buildUpstreamRouteContext,
+  decodeRequestBody,
+  encodeUpstreamBodyForRoute,
+} from "./http-body";
 import {
   findReadTool,
   findShellTool,
@@ -3547,9 +3551,23 @@ async function forwardToUpstream(
   // forwarded by the builders) — set it here to match the bytes we actually
   // send. `serializedBody` (the uncompressed JSON) stays the return value so
   // cache analytics / the cache-warmer keep comparing uncompressed prefixes.
-  const { body: upstreamBody, contentEncoding } = encodeUpstreamBody(
+  //
+  // Scope re-encoding to the destination the client targeted: only replay the
+  // encoding on a native passthrough (no protocol translation) or an explicit
+  // destination override (X-Lore-Upstream-URL / X-Lore-Provider). If the gateway
+  // auto-translated the wire protocol with no explicit destination, the upstream
+  // is a backend the client never targeted and may reject the encoding — forward
+  // uncompressed (always accepted). See mayReencodeUpstream for the rationale,
+  // including why the signal is protocol translation, not provider id (#1032).
+  const { body: upstreamBody, contentEncoding } = encodeUpstreamBodyForRoute(
     serializedBody,
     req.rawHeaders["content-encoding"],
+    buildUpstreamRouteContext(
+      headerUpstream,
+      providerID,
+      req.protocol,
+      effectiveProtocol,
+    ),
   );
   if (contentEncoding) headers["content-encoding"] = contentEncoding;
 
@@ -5791,9 +5809,19 @@ async function passthroughResponsesCompact(
 
   // Re-compress with the client's original Content-Encoding (Codex sends zstd):
   // `bodyText` was decoded on ingress, so replay it in the same wire encoding.
-  const { body: passthroughBody, contentEncoding } = encodeUpstreamBody(
+  // This is a native passthrough — `/v1/responses/compact` in, the same OpenAI
+  // endpoint out, no gateway protocol translation — so it routes through the
+  // same `encodeUpstreamBodyForRoute` chokepoint (equal protocols => trusted)
+  // rather than the raw encoder, keeping that the single re-encode path (#1032).
+  const { body: passthroughBody, contentEncoding } = encodeUpstreamBodyForRoute(
     bodyText,
     rawHeaders["content-encoding"],
+    buildUpstreamRouteContext(
+      undefined,
+      undefined,
+      "openai-responses",
+      "openai-responses",
+    ),
   );
   if (contentEncoding) headers["content-encoding"] = contentEncoding;
 
