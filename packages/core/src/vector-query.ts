@@ -81,6 +81,38 @@ export const MAX_DISTILLATION_VECTOR_ROWS = 500;
  */
 export const MAX_TEMPORAL_VECTOR_ROWS = 4000;
 
+/**
+ * Over-fetch multiplier for `vec0` KNN reads that are post-filtered by a JOIN to
+ * the base table (knowledge: `confidence`/`category`; distillations: `archived`
+ * — mutable/cross-table predicates that can't be pushed into the vec0 `MATCH`).
+ *
+ * A vec0 `MATCH … AND k = N` returns exactly the N nearest rows; post-filter
+ * attrition then drops the ones that fail the predicate, which could leave fewer
+ * than `limit`. So we ask the index for {@link overfetchK}`(limit)` candidates
+ * and re-`LIMIT` to `limit` after filtering. Reads with no post-filter
+ * (entities, allDistillations, temporal) request `k = limit` directly.
+ *
+ * Unlike the blob {@link MAX_TEMPORAL_VECTOR_ROWS} / {@link MAX_DISTILLATION_VECTOR_ROWS}
+ * recency caps, this is NOT a corpus-visibility limit — the vec0 index always
+ * sees the whole corpus; this only widens the KNN candidate window.
+ */
+export const VEC0_FILTER_OVERFETCH = 4;
+
+/**
+ * sqlite-vec's hard ceiling on a KNN `k` (`SQLITE_VEC_VEC0_K_MAX`): a `MATCH …
+ * AND k = N` with N > 4096 errors. Every vec0 `k` we bind is clamped to this.
+ */
+export const VEC0_MAX_K = 4096;
+
+/** Clamp a desired KNN candidate count to {@link VEC0_MAX_K}. */
+function vecK(n: number): number {
+  return Math.min(n, VEC0_MAX_K);
+}
+
+function overfetchK(limit: number): number {
+  return vecK(Math.max(limit * VEC0_FILTER_OVERFETCH, limit + 50));
+}
+
 // ---------------------------------------------------------------------------
 // Math + BLOB helpers (moved here from embedding.ts so the worker can share
 // them without pulling in the provider chain). Re-exported from embedding.ts
@@ -196,16 +228,14 @@ export function runVectorQuery(
 }
 
 /**
- * Guard the `vec0` read mode out of the blob helpers: the DiskANN read path
- * lands in the cutover PR, and `vec0` is unreachable today because no DB is ever
- * flipped to the vec0 storage mode. Throwing (rather than silently scanning the
- * wrong layout) makes a premature cutover loud. Each helper handles `degraded`
- * inline with an early `return []`; after that and this guard, `readMode` is
- * always `blob-native` or `blob-js`.
+ * Defensive guard reached only after each helper has handled `degraded` (early
+ * `return []`) and `vec0` (the FLAT-vec0 KNN branch) inline — so `readMode` here
+ * is always `blob-native` or `blob-js`. If some future mode ever reaches it
+ * unhandled it throws loudly rather than silently scanning the wrong layout.
  */
 function assertBlobReadMode(readMode: VecReadMode): void {
   if (readMode === "vec0") {
-    throw new Error("vec0 read path is not implemented until the cutover PR");
+    throw new Error("vec0 read path must be handled before assertBlobReadMode");
   }
 }
 
@@ -216,8 +246,33 @@ function runKnowledge(
   spec: { limit: number; excludeCategories?: string[] },
 ): VectorHit[] {
   if (readMode === "degraded") return [];
-  assertBlobReadMode(readMode);
   const { limit, excludeCategories } = spec;
+  if (readMode === "vec0") {
+    // DiskANN-free FLAT vec0: exact KNN over the whole corpus (no recency cap).
+    // Post-filter confidence/category (mutable / per-version) by joining the
+    // current-version view; over-fetch so attrition leaves >= limit survivors,
+    // and widen to a full scan if that still under-fills (blob-mode parity).
+    const run = (k: number): VectorHit[] => {
+      let sql =
+        "WITH knn AS (SELECT id, distance FROM knowledge_vec WHERE embedding MATCH ? AND k = ?) " +
+        "SELECT knn.id AS id, 1 - knn.distance AS similarity " +
+        "FROM knn JOIN knowledge_current c ON c.id = knn.id WHERE c.confidence > 0.2";
+      const params: unknown[] = [toBlob(queryEmbedding), k];
+      if (excludeCategories?.length) {
+        sql += ` AND c.category NOT IN (${excludeCategories.map(() => "?").join(",")})`;
+        params.push(...excludeCategories);
+      }
+      sql += " ORDER BY knn.distance LIMIT ?";
+      params.push(limit);
+      return conn.query(sql).all(...params) as VectorHit[];
+    };
+    const k0 = overfetchK(limit);
+    const hits = run(k0);
+    // Post-filter attrition can leave < limit even when more valid rows exist
+    // deeper; widen to the max KNN window (blob-mode parity, capped at 4096).
+    return hits.length >= limit || k0 >= VEC0_MAX_K ? hits : run(VEC0_MAX_K);
+  }
+  assertBlobReadMode(readMode);
   if (readMode === "blob-native") {
     try {
       let sql =
@@ -262,6 +317,13 @@ function runEntities(
   limit: number,
 ): VectorHit[] {
   if (readMode === "degraded") return [];
+  if (readMode === "vec0") {
+    return conn
+      .query(
+        "SELECT id, 1 - distance AS similarity FROM entity_vec WHERE embedding MATCH ? AND k = ? ORDER BY distance",
+      )
+      .all(toBlob(queryEmbedding), vecK(limit)) as VectorHit[];
+  }
   assertBlobReadMode(readMode);
   if (readMode === "blob-native") {
     try {
@@ -294,6 +356,23 @@ function runDistillations(
   limit: number,
 ): VectorHit[] {
   if (readMode === "degraded") return [];
+  if (readMode === "vec0") {
+    // `archived` flips on meta-distillation (mutable) → post-filter via join,
+    // over-fetching so attrition leaves >= limit non-archived survivors, and
+    // widening to a full scan if that still under-fills (blob-mode parity).
+    const run = (k: number): VectorHit[] =>
+      conn
+        .query(
+          "WITH knn AS (SELECT id, distance FROM distillation_vec WHERE embedding MATCH ? AND k = ?) " +
+            "SELECT knn.id AS id, 1 - knn.distance AS similarity " +
+            "FROM knn JOIN distillations d ON d.id = knn.id WHERE d.archived = 0 " +
+            "ORDER BY knn.distance LIMIT ?",
+        )
+        .all(toBlob(queryEmbedding), k, limit) as VectorHit[];
+    const k0 = overfetchK(limit);
+    const hits = run(k0);
+    return hits.length >= limit || k0 >= VEC0_MAX_K ? hits : run(VEC0_MAX_K);
+  }
   assertBlobReadMode(readMode);
   if (readMode === "blob-native") {
     try {
@@ -329,6 +408,21 @@ function runAllDistillations(
   limit: number,
 ): DistillationVectorHit[] {
   if (readMode === "degraded") return [];
+  if (readMode === "vec0") {
+    // Project is a PARTITION KEY → the index scans only this project's rows.
+    // No post-filter (includes archived, by contract) → k = limit. session_id
+    // is an aux column returned straight from the index. Cap removed: the index
+    // sees every distillation in the project, not a recency window.
+    return conn
+      .query(
+        "SELECT id, session_id, 1 - distance AS similarity FROM distillation_vec WHERE embedding MATCH ? AND k = ? AND project_id = ? ORDER BY distance",
+      )
+      .all(
+        toBlob(queryEmbedding),
+        vecK(limit),
+        projectId,
+      ) as DistillationVectorHit[];
+  }
   assertBlobReadMode(readMode);
   if (readMode === "blob-native") {
     try {
@@ -380,6 +474,21 @@ function runTemporal(
   sessionId?: string,
 ): VectorHit[] {
   if (readMode === "degraded") return [];
+  if (readMode === "vec0") {
+    // project_id (and session_id when scoped) are PARTITION KEYs → the index
+    // scans only the matching shard (session-scoped is ~sub-ms). Cap removed:
+    // the index sees the full history, not a recency window. `temporal_vec` is
+    // chunk-keyed; in the single-vector era there is exactly one chunk per
+    // message, so `k = limit` yields `limit` distinct messages and `message_id`
+    // (aux) is the message id callers hydrate by.
+    const vsql = sessionId
+      ? "SELECT message_id AS id, 1 - distance AS similarity FROM temporal_vec WHERE embedding MATCH ? AND k = ? AND project_id = ? AND session_id = ? ORDER BY distance"
+      : "SELECT message_id AS id, 1 - distance AS similarity FROM temporal_vec WHERE embedding MATCH ? AND k = ? AND project_id = ? ORDER BY distance";
+    const vparams: unknown[] = sessionId
+      ? [toBlob(queryEmbedding), vecK(limit), projectId, sessionId]
+      : [toBlob(queryEmbedding), vecK(limit), projectId];
+    return conn.query(vsql).all(...vparams) as VectorHit[];
+  }
   assertBlobReadMode(readMode);
   if (readMode === "blob-native") {
     try {
