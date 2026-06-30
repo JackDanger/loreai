@@ -47,6 +47,69 @@ function resolveExtensionPath(): string | null {
   }
 }
 
+/** Scratch table name for the load-time vec0 KNN probe (temp schema, so it is
+ *  private to the connection and never touches the on-disk DB). */
+const SMOKE_TABLE = "temp.__lore_vec0_smoke";
+
+/**
+ * Prove the `vec0` KNN path actually works on THIS host — not merely that the
+ * extension's scalar SQL functions registered.
+ *
+ * `vec_version()` only confirms the functions loaded; it does NOT exercise the
+ * `vec0` virtual table or the `MATCH … AND k = ?` KNN operator, which can fail
+ * independently (e.g. a binary that loads yet whose `vec0` module is broken on
+ * a particular CPU / SQLite build). That distinction is now load-bearing: once
+ * a DB has cut over to vec0-only storage the base `embedding` BLOB columns are
+ * dropped, so there is no brute-force column left to fall back to — a `vec0`
+ * that loads-but-doesn't-work would make every vector read throw at query time
+ * with no recovery. Probe the real round-trip once at load: build a tiny temp
+ * `vec0` table, insert one row, run a `k = 1` MATCH, and confirm the hit. Any
+ * throw or miss ⇒ report unavailable so callers route to the JS fallback (which
+ * still has BLOBs to scan, because a vec0-only DB never reaches this on an
+ * incapable runtime). Never throws.
+ *
+ * 🔴 Requires a WRITABLE connection: the probe CREATEs a temp table and INSERTs
+ * a row, so it throws "readonly database" on a `query_only` connection. Run it
+ * only on the main writer connection (`loadVecExtension`). Reader connections
+ * (db/reader.ts, `query_only = TRUE`) must NOT use it — their read-only
+ * `MATCH … k = ?` works fine and the host-level capability is already proven by
+ * the main loader.
+ */
+export function vec0KnnSmokeOk(database: Database): boolean {
+  // Bind the probe vector as a Float32Array BLOB — byte-for-byte the same param
+  // shape every production vec0 read/write uses (`toBlob()` in vector-query.ts /
+  // vec-store.ts). Mirroring the real path means the probe proves exactly what
+  // production relies on, identically under node:sqlite and bun:sqlite (a raw
+  // Buffer binds as a BLOB on both; a JSON-text vector would exercise a
+  // different, less-tested binding). `Buffer` is a runtime global — no import.
+  const probe = Buffer.from(new Float32Array([1, 0, 0, 0]).buffer);
+  try {
+    database.query(`DROP TABLE IF EXISTS ${SMOKE_TABLE}`).run();
+    database
+      .query(
+        `CREATE VIRTUAL TABLE ${SMOKE_TABLE} USING vec0(` +
+          "id TEXT PRIMARY KEY, embedding float[4] distance_metric=cosine)",
+      )
+      .run();
+    database
+      .query(`INSERT INTO ${SMOKE_TABLE}(id, embedding) VALUES ('probe', ?)`)
+      .run(probe);
+    const hit = database
+      .query(`SELECT id FROM ${SMOKE_TABLE} WHERE embedding MATCH ? AND k = 1`)
+      .get(probe) as { id?: string } | undefined;
+    database.query(`DROP TABLE ${SMOKE_TABLE}`).run();
+    return hit?.id === "probe";
+  } catch {
+    // Best-effort cleanup so a retry on the same connection starts clean.
+    try {
+      database.query(`DROP TABLE IF EXISTS ${SMOKE_TABLE}`).run();
+    } catch {
+      /* ignore — the connection is about to fall back to JS anyway */
+    }
+    return false;
+  }
+}
+
 /**
  * Attempt to load sqlite-vec into the given connection. Runs once per process
  * (guarded by `attempted`); call `resetVecState()` when the connection closes
@@ -97,6 +160,14 @@ export function loadVecExtension(database: Database): void {
       | { v?: string }
       | undefined;
     version = row?.v ?? "unknown";
+    // …and confirm the vec0 KNN path itself works, not just the scalar funcs —
+    // a loads-but-broken vec0 has no blob fallback on a cut-over DB.
+    if (!vec0KnnSmokeOk(database)) {
+      log.warn(
+        `sqlite-vec: extension loaded (${version}) but vec0 KNN smoke test failed — using JS brute-force vector search`,
+      );
+      return; // vecAvailable stays false → JS fallback
+    }
     loadedPath = path;
     vecAvailable = true;
   } catch (e) {
@@ -136,6 +207,15 @@ export function loadVecForConnection(database: Database): boolean {
     const row = database.query("SELECT vec_version() AS v").get() as
       | { v?: string }
       | undefined;
+    // NOTE: deliberately NO vec0 KNN smoke here. Reader connections are opened
+    // `query_only = TRUE` (see db/reader.ts), so the write-based smoke (it
+    // CREATEs + INSERTs into a temp vec0 table) would throw "readonly database"
+    // and falsely demote a perfectly-good read-only connection to JS fallback.
+    // The vec0 KNN capability is a property of the host + extension binary, not
+    // of an individual connection — it is proven once on the writable main
+    // connection in `loadVecExtension`. A reader loads the SAME binary on the
+    // SAME host, so a successful `vec_version()` is sufficient here; its actual
+    // job (read-only `MATCH … k = ?`) works fine under `query_only`.
     return typeof row?.v === "string" && row.v.length > 0;
   } catch {
     return false;

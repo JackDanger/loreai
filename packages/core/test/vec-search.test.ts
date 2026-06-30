@@ -7,8 +7,13 @@ import {
   test,
   vi,
 } from "vitest";
+import { Database } from "#db/driver";
 import { close, db, ensureProject, withTransaction } from "../src/db";
-import { isVecAvailable } from "../src/db/vec";
+import {
+  isVecAvailable,
+  loadVecForConnection,
+  vec0KnnSmokeOk,
+} from "../src/db/vec";
 import * as log from "../src/log";
 import {
   toBlob,
@@ -115,6 +120,117 @@ describe("loadVecExtension startup logging", () => {
     expect(infoLines(info).some((l) => l.includes("LORE_DISABLE_VEC"))).toBe(
       true,
     );
+  });
+});
+
+// The load-time vec0 KNN smoke guard. `vec_version()` only proves the scalar
+// SQL functions registered; the loader additionally round-trips a tiny vec0 KNN
+// query before trusting the native fast path. This matters because a cut-over
+// (vec0-only) DB has no base `embedding` BLOB column to fall back to — a
+// loads-but-broken vec0 must be demoted to the JS fallback here, not discovered
+// at query time.
+describe("vec0 KNN smoke guard (vec0KnnSmokeOk)", () => {
+  test("passes on a vec-loaded connection and is repeatable", () => {
+    if (!isVecAvailable()) return; // JS-only runtime: nothing to probe
+    ensureProject(PROJECT); // ensure the shared connection is open + vec-loaded
+    // Twice over, to prove the probe drops its scratch table each call so a
+    // re-probe on the same connection still works (the worker-reader pattern).
+    expect(vec0KnnSmokeOk(db())).toBe(true);
+    expect(vec0KnnSmokeOk(db())).toBe(true);
+  });
+
+  test("leaves no scratch table behind", () => {
+    if (!isVecAvailable()) return;
+    ensureProject(PROJECT);
+    vec0KnnSmokeOk(db());
+    const leftover = db()
+      .query(
+        "SELECT name FROM temp.sqlite_master WHERE name = '__lore_vec0_smoke'",
+      )
+      .get() as { name?: string } | null | undefined;
+    expect(leftover ?? null).toBeNull();
+  });
+
+  // Fail-closed / non-vacuous: a connection that never loaded sqlite-vec has no
+  // `vec0` module, so `CREATE VIRTUAL TABLE … USING vec0` throws and the guard
+  // reports false. If the guard ever stopped genuinely exercising vec0 (e.g.
+  // returned a constant `true`), THIS assertion would fail — which is the point.
+  test("fails closed when the vec0 module is absent", () => {
+    const raw = new Database(":memory:"); // no loadExtension → no vec0 module
+    try {
+      expect(vec0KnnSmokeOk(raw)).toBe(false);
+    } finally {
+      raw.close();
+    }
+  });
+
+  // The probe writes (CREATE temp table + INSERT), so it requires a writable
+  // connection. This is WHY only the main writer connection runs it and the
+  // query_only reader path (loadVecForConnection) does not — see below.
+  test("returns false on a query_only (read-only) connection", () => {
+    if (!isVecAvailable()) return;
+    ensureProject(PROJECT);
+    const raw = new Database(":memory:");
+    loadVecForConnection(raw); // vec0 module IS loaded on this connection…
+    raw.exec("PRAGMA query_only = TRUE"); // …but writes are now forbidden
+    try {
+      // false because the probe can't write — NOT because vec0 is missing
+      // (read-only `MATCH` would still work; see the reader-path test below).
+      expect(vec0KnnSmokeOk(raw)).toBe(false);
+    } finally {
+      raw.close();
+    }
+  });
+});
+
+// Worker readers load sqlite-vec on their OWN connection via
+// `loadVecForConnection` (see db/reader.ts) — a path the main-connection tests
+// never exercise (the gap tracked in #1033). Unlike the main loader it does NOT
+// run the write-based vec0 KNN smoke, because reader connections are opened
+// `query_only = TRUE`; the host-level vec0 capability is proven once on the
+// writable main connection. Here it runs against throwaway in-memory connections.
+describe("loadVecForConnection (worker reader path)", () => {
+  test("loads on a fresh connection iff the runtime is vec-capable", () => {
+    ensureProject(PROJECT); // (re)open the main connection so isVecAvailable() is current
+    const raw = new Database(":memory:");
+    try {
+      // Reaches the same load verdict as the main loader: extension loads +
+      // vec_version() comes back (true) on a capable runtime, JS fallback
+      // (false) on one without the extension.
+      expect(loadVecForConnection(raw)).toBe(isVecAvailable());
+    } finally {
+      raw.close();
+    }
+  });
+
+  // 🔴 Regression guard (the bug the SEA binary smoke test caught): a real
+  // reader connection is `query_only = TRUE`, so it can only SELECT. A
+  // write-based vec0 probe (CREATE temp table + INSERT) would throw
+  // "readonly database" and FALSELY demote a working read-only connection to
+  // the JS fallback. `loadVecForConnection` must therefore NOT probe with
+  // writes — a query_only reader must still report vec available.
+  test("reports vec available on a query_only reader connection", () => {
+    ensureProject(PROJECT);
+    const raw = new Database(":memory:");
+    raw.exec("PRAGMA query_only = TRUE"); // mirror db/reader.ts
+    try {
+      expect(loadVecForConnection(raw)).toBe(isVecAvailable());
+    } finally {
+      raw.close();
+    }
+  });
+
+  test("honours the LORE_DISABLE_VEC kill-switch", () => {
+    const prev = process.env.LORE_DISABLE_VEC;
+    process.env.LORE_DISABLE_VEC = "1";
+    const raw = new Database(":memory:");
+    try {
+      expect(loadVecForConnection(raw)).toBe(false);
+    } finally {
+      raw.close();
+      if (prev === undefined) delete process.env.LORE_DISABLE_VEC;
+      else process.env.LORE_DISABLE_VEC = prev;
+    }
   });
 });
 
