@@ -22,8 +22,15 @@ import {
   resolveWorkerProtocol,
   AUTH_ERROR_CODES,
   isTemperatureUnsupportedModel,
+  isAnthropicClaudeModel,
+  isThinkingUnsupportedModel,
+  markThinkingUnsupported,
+  workerThinkingOnByDefault,
+  modelRejectsTemperatureByData,
   _resetTemperatureUnsupportedModels,
+  _resetThinkingUnsupportedModels,
 } from "../src/llm-adapter";
+import { _setModelDataForTest, clearModelDataCache } from "../src/worker-model";
 import {
   getConsecutiveTrips,
   resetBackgroundLimiter,
@@ -1722,5 +1729,392 @@ describe("worker temperature capability", () => {
     expect(betaOf(2)).not.toContain("context-1m");
     expect(betaOf(2)).toContain("oauth-2025-04-20");
     expect(bodyOf(2)).not.toHaveProperty("temperature");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Worker thinking suppression.
+//
+// Workers do deterministic single-shot summarization (distillation/curation)
+// and never benefit from extended/adaptive thinking. Newer Claude models
+// (claude-sonnet-5+) use ADAPTIVE thinking that is silently activated by the
+// replayed Claude Code OAuth fingerprint (`oauth-2025-04-20` beta on
+// api.anthropic.com). When active, the model can return an EMPTY thinking block
+// with no visible text — the worker then sees a "no usable text" empty response
+// and the whole distill/curate loop degrades. We send `thinking:{type:"disabled"}`
+// on genuine Anthropic Claude worker requests to force plain text output.
+// ---------------------------------------------------------------------------
+describe("worker thinking disabled for Anthropic Claude models", () => {
+  const mockFetch = vi.mocked(upstreamFetch);
+
+  const UPSTREAMS = {
+    anthropic: "https://api.anthropic.com",
+    openai: "https://api.openai.com",
+  };
+
+  beforeEach(() => {
+    _resetThinkingUnsupportedModels();
+  });
+
+  afterEach(() => {
+    mockFetch.mockReset();
+    clearAllCosts();
+    resetBackgroundLimiter();
+    _resetThinkingUnsupportedModels();
+  });
+
+  // Anthropic-style 400 for a model that doesn't accept the `thinking` field
+  // (e.g. one that predates the thinking API).
+  const THINKING_UNSUPPORTED_400 = JSON.stringify({
+    type: "error",
+    error: {
+      type: "invalid_request_error",
+      message: "thinking: Extra inputs are not permitted",
+    },
+  });
+
+  function bodyOf(callIndex: number): Record<string, unknown> | undefined {
+    const raw = mockFetch.mock.calls[callIndex]?.[1]?.body;
+    if (typeof raw !== "string") return undefined;
+    return JSON.parse(raw) as Record<string, unknown>;
+  }
+
+  function betaOf(callIndex: number): string | undefined {
+    const headers = mockFetch.mock.calls[callIndex]?.[1]?.headers as
+      | Record<string, string>
+      | undefined;
+    if (!headers) return undefined;
+    const key = Object.keys(headers).find(
+      (k) => k.toLowerCase() === "anthropic-beta",
+    );
+    return key ? headers[key] : undefined;
+  }
+
+  const okResponse = () =>
+    new Response(
+      JSON.stringify({
+        content: [{ type: "text", text: "ok" }],
+        usage: { input_tokens: 1, output_tokens: 1 },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+
+  test("isAnthropicClaudeModel matches real Claude ids and excludes compat providers", () => {
+    expect(isAnthropicClaudeModel("claude-sonnet-5")).toBe(true);
+    expect(isAnthropicClaudeModel("claude-haiku-4-5")).toBe(true);
+    expect(isAnthropicClaudeModel("anthropic.claude-haiku-4-5")).toBe(true); // Bedrock mantle id
+    expect(isAnthropicClaudeModel("MiniMax-M1")).toBe(false);
+    expect(isAnthropicClaudeModel("gpt-5")).toBe(false);
+  });
+
+  test("genuine Anthropic Claude worker request disables thinking", async () => {
+    mockFetch.mockResolvedValue(okResponse());
+    const client = createGatewayLLMClient(
+      UPSTREAMS,
+      () => ({ scheme: "api-key", value: "sk-ant-test" }),
+      { providerID: "anthropic", modelID: "claude-sonnet-5" },
+    );
+
+    await client.prompt("system", "user", {
+      sessionID: "sess-think-basic",
+      workerID: "lore-distill",
+      model: { providerID: "anthropic", modelID: "claude-sonnet-5" },
+    });
+
+    expect(bodyOf(0)?.thinking).toEqual({ type: "disabled" });
+  });
+
+  test("OAuth-fingerprint Claude worker (the failing production path) disables thinking despite the replayed interleaved-thinking beta", async () => {
+    mockFetch.mockResolvedValue(okResponse());
+    // Simulate a Claude Code OAuth session: billing prefix marks it, and the
+    // sniffed anthropic-beta (with the interleaved-thinking flag that would
+    // otherwise let sonnet-5 emit an empty thinking block) is replayed onto
+    // worker calls.
+    captureBillingPrefix("sess-think-oauth", BILLING_SYSTEM);
+    captureSessionHeaders("sess-think-oauth", {
+      "anthropic-beta": "oauth-2025-04-20,interleaved-thinking-2025-05-14",
+    });
+
+    const client = createGatewayLLMClient(
+      UPSTREAMS,
+      () => ({ scheme: "bearer", value: "oauth-token" }),
+      { providerID: "anthropic", modelID: "claude-sonnet-5" },
+    );
+
+    await client.prompt("system", "user", {
+      sessionID: "sess-think-oauth",
+      workerID: "lore-distill",
+      model: { providerID: "anthropic", modelID: "claude-sonnet-5" },
+    });
+
+    // The interleaved-thinking beta IS replayed (unchanged behavior)...
+    expect(betaOf(0)).toContain("interleaved-thinking");
+    // ...but thinking is explicitly disabled, so the model cannot burn its
+    // budget on an (empty) thinking block and starve the visible text.
+    expect(bodyOf(0)?.thinking).toEqual({ type: "disabled" });
+  });
+
+  test("anthropic-compat (non-Claude) worker does NOT send a thinking param", async () => {
+    mockFetch.mockResolvedValue(okResponse());
+    const client = createGatewayLLMClient(
+      UPSTREAMS,
+      () => ({ scheme: "api-key", value: "mm-key" }),
+      { providerID: "minimax", modelID: "MiniMax-M1" },
+    );
+
+    await client.prompt("system", "user", {
+      sessionID: "sess-think-mm",
+      workerID: "lore-distill",
+      model: { providerID: "minimax", modelID: "MiniMax-M1" },
+      protocol: "anthropic",
+      upstreamProviderID: "minimax",
+      upstreamUrl: "https://api.minimaxi.chat",
+    });
+
+    expect(bodyOf(0)).not.toHaveProperty("thinking");
+  });
+
+  test("bedrock mantle Claude worker disables thinking (Anthropic Messages shape; sonnet-5-gen adaptive thinking is on by default on Bedrock too)", async () => {
+    mockFetch.mockResolvedValue(okResponse());
+    const client = createGatewayLLMClient(
+      UPSTREAMS,
+      () => ({ scheme: "api-key", value: "bedrock-key" }),
+      { providerID: "bedrock", modelID: "claude-haiku-4-5" },
+    );
+
+    await client.prompt("system", "user", {
+      sessionID: "sess-think-bedrock",
+      workerID: "lore-distill",
+      upstreamUrl: "https://bedrock-mantle.us-east-1.api.aws/anthropic",
+      upstreamProviderID: "bedrock",
+      protocol: "anthropic",
+    });
+
+    expect(bodyOf(0)?.thinking).toEqual({ type: "disabled" });
+    // The body model is the mantle catalog id.
+    expect(bodyOf(0)?.model).toBe("anthropic.claude-haiku-4-5");
+  });
+
+  // -------------------------------------------------------------------------
+  // Data-driven capability from models.dev (thinking + temperature).
+  // -------------------------------------------------------------------------
+  describe("driven by models.dev capability data", () => {
+    afterEach(() => {
+      clearModelDataCache();
+    });
+
+    test("workerThinkingOnByDefault: toggle → true; effort/budget_tokens/none → false", () => {
+      _setModelDataForTest({
+        "claude-sonnet-5": {
+          id: "claude-sonnet-5",
+          reasoning: true,
+          reasoning_options: [{ type: "toggle" }, { type: "effort" }],
+        },
+        "claude-opus-4-8": {
+          id: "claude-opus-4-8",
+          reasoning: true,
+          reasoning_options: [{ type: "effort" }],
+        },
+        "claude-sonnet-4-5": {
+          id: "claude-sonnet-4-5",
+          reasoning: true,
+          reasoning_options: [{ type: "budget_tokens" }],
+        },
+        "some-nonreasoning": { id: "some-nonreasoning", reasoning: false },
+      });
+      expect(workerThinkingOnByDefault({ modelID: "claude-sonnet-5" })).toBe(
+        true,
+      );
+      // On-by-default only for `toggle`; effort/budget_tokens run without
+      // thinking unless asked, so no opt-out param is needed.
+      expect(workerThinkingOnByDefault({ modelID: "claude-opus-4-8" })).toBe(
+        false,
+      );
+      expect(workerThinkingOnByDefault({ modelID: "claude-sonnet-4-5" })).toBe(
+        false,
+      );
+      expect(workerThinkingOnByDefault({ modelID: "some-nonreasoning" })).toBe(
+        false,
+      );
+    });
+
+    test("workerThinkingOnByDefault: falls back to the Claude-id heuristic when models.dev has no data (offline safety)", () => {
+      clearModelDataCache(); // no models.dev data available
+      // A models.dev outage must NOT stop us disabling thinking on Claude models.
+      expect(workerThinkingOnByDefault({ modelID: "claude-sonnet-5" })).toBe(
+        true,
+      );
+      expect(workerThinkingOnByDefault({ modelID: "MiniMax-M1" })).toBe(false);
+    });
+
+    test("effort-only model (opus-4-8) does NOT get a thinking param when models.dev data is present", async () => {
+      _setModelDataForTest({
+        "claude-opus-4-8": {
+          id: "claude-opus-4-8",
+          reasoning: true,
+          reasoning_options: [{ type: "effort" }],
+        },
+      });
+      mockFetch.mockResolvedValue(okResponse());
+      const client = createGatewayLLMClient(
+        UPSTREAMS,
+        () => ({ scheme: "api-key", value: "sk-ant-test" }),
+        { providerID: "anthropic", modelID: "claude-opus-4-8" },
+      );
+      await client.prompt("system", "user", {
+        sessionID: "sess-effort",
+        workerID: "lore-distill",
+        model: { providerID: "anthropic", modelID: "claude-opus-4-8" },
+      });
+      expect(bodyOf(0)).not.toHaveProperty("thinking");
+    });
+
+    test("modelRejectsTemperatureByData reflects the models.dev temperature flag", () => {
+      _setModelDataForTest({
+        "claude-sonnet-5": { id: "claude-sonnet-5", temperature: false },
+        "claude-sonnet-4-5": { id: "claude-sonnet-4-5", temperature: true },
+      });
+      expect(modelRejectsTemperatureByData("claude-sonnet-5")).toBe(true);
+      expect(modelRejectsTemperatureByData("claude-sonnet-4-5")).toBe(false);
+      // Unknown model (no data) → not proactively stripped (learning net covers).
+      expect(modelRejectsTemperatureByData("mystery-model")).toBe(false);
+    });
+
+    test("temperature is stripped upfront (no 400 needed) when models.dev marks the model temperature:false", async () => {
+      _setModelDataForTest({
+        "claude-sonnet-5": { id: "claude-sonnet-5", temperature: false },
+      });
+      mockFetch.mockResolvedValue(okResponse());
+      const client = createGatewayLLMClient(
+        UPSTREAMS,
+        () => ({ scheme: "api-key", value: "sk-ant-test" }),
+        { providerID: "anthropic", modelID: "claude-sonnet-5" },
+      );
+      await client.prompt("system", "user", {
+        sessionID: "sess-temp-data",
+        workerID: "lore-distill",
+        model: { providerID: "anthropic", modelID: "claude-sonnet-5" },
+        temperature: 0,
+      });
+      // Single attempt, no 400 round-trip — temperature omitted from the start.
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(bodyOf(0)).not.toHaveProperty("temperature");
+    });
+
+    test("temperature is kept when models.dev marks the model temperature:true", async () => {
+      _setModelDataForTest({
+        "claude-sonnet-4-5": { id: "claude-sonnet-4-5", temperature: true },
+      });
+      mockFetch.mockResolvedValue(okResponse());
+      const client = createGatewayLLMClient(
+        UPSTREAMS,
+        () => ({ scheme: "api-key", value: "sk-ant-test" }),
+        { providerID: "anthropic", modelID: "claude-sonnet-4-5" },
+      );
+      await client.prompt("system", "user", {
+        sessionID: "sess-temp-keep-data",
+        workerID: "lore-distill",
+        model: { providerID: "anthropic", modelID: "claude-sonnet-4-5" },
+        temperature: 0,
+      });
+      expect(bodyOf(0)?.temperature).toBe(0);
+    });
+  });
+
+  test("retries once without the thinking param on a thinking-unsupported 400, then succeeds and learns", async () => {
+    let call = 0;
+    mockFetch.mockImplementation(async () => {
+      call++;
+      if (call === 1) {
+        return new Response(THINKING_UNSUPPORTED_400, { status: 400 });
+      }
+      return new Response(
+        JSON.stringify({
+          content: [{ type: "text", text: "recovered" }],
+          usage: { input_tokens: 1, output_tokens: 1 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+
+    const model = { providerID: "anthropic", modelID: "claude-legacy-3" };
+    const client = createGatewayLLMClient(
+      UPSTREAMS,
+      () => ({ scheme: "api-key", value: "sk-ant-test" }),
+      model,
+    );
+
+    const result = await client.prompt("system", "user", {
+      sessionID: "sess-think-400",
+      workerID: "lore-distill",
+      model,
+    });
+
+    expect(result).toBe("recovered");
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    // First attempt carried thinking; the retry dropped it entirely.
+    expect(bodyOf(0)?.thinking).toEqual({ type: "disabled" });
+    expect(bodyOf(1)).toBeDefined();
+    expect(bodyOf(1)).not.toHaveProperty("thinking");
+    // The model is now learned as thinking-unsupported.
+    expect(isThinkingUnsupportedModel(model)).toBe(true);
+    // A recovered thinking-strip retry is NOT a worker failure.
+    expect(recordWorkerFailure).not.toHaveBeenCalled();
+    expect(markWorkerPaused).not.toHaveBeenCalled();
+  });
+
+  test("omits the thinking param upfront once a model is learned", async () => {
+    const model = { providerID: "anthropic", modelID: "claude-legacy-3" };
+    markThinkingUnsupported(model);
+    mockFetch.mockResolvedValue(okResponse());
+
+    const client = createGatewayLLMClient(
+      UPSTREAMS,
+      () => ({ scheme: "api-key", value: "sk-ant-test" }),
+      model,
+    );
+
+    await client.prompt("system", "user", {
+      sessionID: "sess-think-learned",
+      workerID: "lore-distill",
+      model,
+    });
+
+    // No wasted round-trip — thinking is omitted upfront on the first call.
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(bodyOf(0)).not.toHaveProperty("thinking");
+  });
+
+  test("does not strip thinking for an unrelated 400", async () => {
+    let call = 0;
+    mockFetch.mockImplementation(async () => {
+      call++;
+      return new Response(
+        JSON.stringify({
+          type: "error",
+          error: { type: "invalid_request_error", message: "bad request" },
+        }),
+        { status: 400 },
+      );
+    });
+
+    const model = { providerID: "anthropic", modelID: "claude-sonnet-5" };
+    const client = createGatewayLLMClient(
+      UPSTREAMS,
+      () => ({ scheme: "api-key", value: "sk-ant-test" }),
+      model,
+    );
+
+    const result = await client.prompt("system", "user", {
+      sessionID: "sess-think-unrelated",
+      workerID: "lore-distill",
+      model,
+    });
+
+    expect(result).toBeNull();
+    // No thinking-strip retry for an unrelated 400 — single attempt, not learned.
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(isThinkingUnsupportedModel(model)).toBe(false);
+    expect(call).toBe(1);
   });
 });

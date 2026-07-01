@@ -218,6 +218,106 @@ function isTemperatureUnsupported400(body: string): boolean {
 }
 
 /**
+ * True when a worker model is a genuine Anthropic Claude model (not an
+ * anthropic-compat third party like MiniMax / vLLM served over the Anthropic
+ * wire protocol). Every real Claude model id contains "claude" — direct
+ * (`claude-sonnet-5`), Bedrock mantle (`anthropic.claude-…`), and Vertex
+ * (`claude-…`). Compat providers use their own model ids (e.g. `MiniMax-M1`),
+ * so they are naturally excluded.
+ */
+export function isAnthropicClaudeModel(modelID: string): boolean {
+  return /claude/i.test(modelID);
+}
+
+/**
+ * Decide whether a worker request to this model should carry
+ * `thinking:{type:"disabled"}`.
+ *
+ * PRIMARY (data-driven): models.dev `reasoning_options`. A `toggle` entry marks
+ * a model whose adaptive thinking is ON BY DEFAULT (claude-sonnet-5) and must be
+ * turned off explicitly. `effort`-only (claude-opus-4-8, gpt-5) and
+ * `budget_tokens` (claude-sonnet-4-5) models run WITHOUT thinking unless it is
+ * requested, so they need no opt-out — returning false avoids an unnecessary
+ * param. This generalizes across providers/generations with no hardcoded list.
+ *
+ * FALLBACK (offline-safe): when models.dev has NO reasoning data for the model
+ * (API outage, or an id newer than the models.dev snapshot), fall back to the
+ * Claude-id heuristic so an on-by-default Claude model is still covered when the
+ * data is unavailable — a models.dev outage must never silently re-break workers.
+ * Sending the param is a harmless no-op for off-by-default Claude models, and the
+ * runtime learning net strips it for any model that rejects it.
+ */
+export function workerThinkingOnByDefault(model: { modelID: string }): boolean {
+  const opts = getModelEntrySync(model.modelID).reasoning_options;
+  if (Array.isArray(opts) && opts.length > 0) {
+    return opts.some((o) => o?.type === "toggle");
+  }
+  return isAnthropicClaudeModel(model.modelID);
+}
+
+/**
+ * models.dev-driven check: does this model reject a non-default sampling
+ * `temperature`? True for the deprecated-sampling generation (claude-sonnet-5,
+ * claude-opus-4-7/4-8, gpt-5, o3, …) where `temperature` is `false`. Used to
+ * strip `temperature` PROACTIVELY (before the first 400); the runtime
+ * learning net (`isTemperatureUnsupportedModel`) remains the fallback for
+ * models absent from models.dev or during an outage.
+ */
+export function modelRejectsTemperatureByData(modelID: string): boolean {
+  return getModelEntrySync(modelID).temperature === false;
+}
+
+/**
+ * Companion to the temperature-capability learning above, for the `thinking`
+ * param. Workers send `thinking:{type:"disabled"}` to genuine Anthropic Claude
+ * models to suppress adaptive thinking (see `buildAnthropicWorkerRequest`).
+ * Every current Claude model accepts it, but a model that predates the thinking
+ * API (older claude-3.x, still reachable on some accounts) can reject an unknown
+ * `thinking` field with a 400. We learn that at runtime — on the first such 400
+ * — so subsequent calls omit the param, exactly mirroring the temperature
+ * mechanism. In-memory; re-learns at most once per model per gateway lifetime.
+ */
+const thinkingUnsupportedModels = new Set<string>();
+
+/** Record that a model rejects the `thinking` param (learned from a 400). */
+export function markThinkingUnsupported(model: {
+  providerID: string;
+  modelID: string;
+}): void {
+  thinkingUnsupportedModels.add(workerModelKey(model));
+}
+
+/** Has this model been observed to reject the `thinking` param? */
+export function isThinkingUnsupportedModel(model: {
+  providerID: string;
+  modelID: string;
+}): boolean {
+  return thinkingUnsupportedModels.has(workerModelKey(model));
+}
+
+/** Test-only: clear the learned thinking-capability set. */
+export function _resetThinkingUnsupportedModels(): void {
+  thinkingUnsupportedModels.clear();
+}
+
+/**
+ * Heuristic: does a 400 body indicate the request's `thinking` param is not
+ * accepted by this model? Matches Anthropic param-rejection shapes for an
+ * unknown/unsupported field (e.g. "thinking: Extra inputs are not permitted",
+ * "thinking.type ... not supported"). Requires the word `thinking` AND a
+ * rejection verb so an unrelated 400 that merely mentions thinking can't trigger
+ * the one-shot thinking-stripped retry.
+ */
+function isThinkingUnsupported400(body: string): boolean {
+  return (
+    /thinking/i.test(body) &&
+    /\b(deprecated|unsupported|no\s+longer\s+supported|not\s+supported|not\s+permitted|not\s+allowed|unexpected|unrecognized|unknown|extra\s+inputs|removed|invalid)\b/i.test(
+      body,
+    )
+  );
+}
+
+/**
  * Unified retry policy (modeled on Claude Code's `getRetryDelay`).
  *
  * A single policy governs every worker call — urgent or background, 429 or
@@ -565,6 +665,7 @@ function buildAnthropicWorkerRequest(
   maxTokens: number,
   sessionID?: string,
   temperature?: number,
+  disableThinking = false,
 ): { url: string; headers: Record<string, string>; body: string } {
   // For bearer tokens (Claude Code OAuth), inject the billing header
   // as the first system block with a cch=00000 placeholder that gets
@@ -602,10 +703,23 @@ function buildAnthropicWorkerRequest(
     ? toMantleModelId(model.modelID)
     : model.modelID;
 
+  // `disableThinking` (decided by the caller — see the retry loop) sends
+  // `thinking:{type:"disabled"}` for genuine Anthropic Claude workers. Workers
+  // do deterministic single-shot summarization (distillation / curation) and
+  // never benefit from thinking. Newer models (claude-sonnet-5+) use ADAPTIVE
+  // thinking that is silently activated by the replayed Claude Code OAuth
+  // fingerprint (`oauth-2025-04-20` beta on api.anthropic.com); when active the
+  // model can spend its budget on a thinking block and return an EMPTY thinking
+  // block with no visible text — the worker then sees a "no usable text" empty
+  // response and the whole distill/curate loop degrades. `{type:"disabled"}` is
+  // accepted (and a no-op) by all current Claude models; a rare model that
+  // rejects the param (older claude-3.x) is learned via a one-shot 400 retry in
+  // the loop, which then passes `disableThinking=false` here.
   let body = JSON.stringify({
     model: upstreamModelID,
     max_tokens: maxTokens,
     ...(temperature != null && { temperature }),
+    ...(disableThinking && { thinking: { type: "disabled" } }),
     system: systemPayload,
     messages: [{ role: "user", content: user }],
   });
@@ -894,6 +1008,7 @@ async function buildVertexWorkerRequest(
   maxTokens: number,
   vertexProject?: string,
   temperature?: number,
+  disableThinking = false,
 ): Promise<{ url: string; headers: Record<string, string>; body: string }> {
   const region = vertexRegionFromUrl(target.url) ?? "global";
   const project = await resolveVertexProject(vertexProject ?? "");
@@ -921,6 +1036,11 @@ async function buildVertexWorkerRequest(
     toVertexBody({
       max_tokens: maxTokens,
       ...(temperature != null && { temperature }),
+      // Vertex serves Claude over the Anthropic Messages body shape, so the same
+      // adaptive-thinking-on-by-default applies (sonnet-5). `thinking:{type:
+      // "disabled"}` passes through toVertexBody and turns it off. See
+      // buildAnthropicWorkerRequest for the full rationale.
+      ...(disableThinking && { thinking: { type: "disabled" } }),
       system: systemBlocks,
       messages: [{ role: "user", content: user }],
     }),
@@ -957,6 +1077,7 @@ async function buildWorkerRequest(
   sessionID?: string,
   temperature?: number,
   vertexProject?: string,
+  disableThinking = false,
 ): Promise<{ url: string; headers: Record<string, string>; body: string }> {
   switch (target.protocol) {
     case "openai-codex-responses":
@@ -989,6 +1110,7 @@ async function buildWorkerRequest(
         maxTokens,
         vertexProject,
         temperature,
+        disableThinking,
       );
     default:
       return buildAnthropicWorkerRequest(
@@ -1000,6 +1122,7 @@ async function buildWorkerRequest(
         maxTokens,
         sessionID,
         temperature,
+        disableThinking,
       );
   }
 }
@@ -1273,13 +1396,32 @@ export function createGatewayLLMClient(
         }
       }
 
-      // Resolve the effective sampling temperature. Models we've already
-      // observed to reject `temperature` (see markTemperatureUnsupported) get
-      // it omitted upfront so we don't burn a wasted 400 round-trip per call.
-      // A runtime-learned 400 below flips this to undefined for the retry.
-      let effectiveTemperature = isTemperatureUnsupportedModel(model)
-        ? undefined
-        : opts?.temperature;
+      // Resolve the effective sampling temperature. It is omitted upfront when
+      // models.dev marks the model as not accepting a non-default `temperature`
+      // (the deprecated-sampling generation: sonnet-5, opus-4.7+, gpt-5, o3 …)
+      // OR when we've already learned it at runtime from a 400 — so we don't
+      // burn a wasted round-trip. A runtime-learned 400 below also flips this to
+      // undefined for the retry (the offline/models.dev-gap safety net).
+      let effectiveTemperature =
+        isTemperatureUnsupportedModel(model) ||
+        modelRejectsTemperatureByData(model.modelID)
+          ? undefined
+          : opts?.temperature;
+
+      // Resolve whether to disable thinking. Adaptive thinking is ON BY DEFAULT
+      // on the newest generation (claude-sonnet-5 today) and otherwise burns the
+      // `max_tokens` budget on a thinking block, starving the visible text and
+      // yielding an empty worker response. `workerThinkingOnByDefault` decides
+      // this data-drivenly from models.dev `reasoning_options` (with a Claude-id
+      // fallback when the data is unavailable). Gated to the Anthropic Messages
+      // wire protocols — "anthropic" (direct + Bedrock mantle) and "vertex" —
+      // the only builders that emit the `thinking` field. A model observed to
+      // reject the param gets it omitted upfront; a runtime-learned 400 below
+      // flips this to false for the retry.
+      let effectiveDisableThinking =
+        (target.protocol === "anthropic" || target.protocol === "vertex") &&
+        workerThinkingOnByDefault(model) &&
+        !isThinkingUnsupportedModel(model);
 
       // The credential in effect for the CURRENT attempt. Starts as `cred`; an
       // auth-error refresh reassigns it so every later rebuild in the retry loop
@@ -1299,6 +1441,7 @@ export function createGatewayLLMClient(
         opts?.sessionID,
         effectiveTemperature,
         factoryVertexProject,
+        effectiveDisableThinking,
       );
 
       // Track this call so temporal capture can skip it
@@ -1338,6 +1481,9 @@ export function createGatewayLLMClient(
             // Strip the temperature param at most once per call (runtime
             // fallback for a "temperature is deprecated" 400 — see below).
             let temperatureStripped = false;
+            // Strip the thinking param at most once per call (runtime fallback
+            // for a "thinking is unsupported" 400 — see below).
+            let thinkingStripped = false;
             // Resolve the retry budget once per call (not per attempt) — the
             // value can't change mid-loop and re-reading the env each iteration
             // is wasteful.
@@ -1350,9 +1496,9 @@ export function createGatewayLLMClient(
                 response = await upstreamFetch(req.url, {
                   method: "POST",
                   headers: req.headers,
-                  // opts.thinking is intentionally not forwarded — this bare API
-                  // call never includes the `thinking` parameter so models
-                  // won't produce thinking tokens regardless.
+                  // The request body may carry `thinking:{type:"disabled"}` for
+                  // Claude workers (built above) to SUPPRESS thinking — it never
+                  // ENABLES it. opts.thinking is not forwarded.
                   body: req.body,
                 });
               } catch (e) {
@@ -1385,6 +1531,11 @@ export function createGatewayLLMClient(
                 // regex false-positive on an unrelated 400 can never permanently
                 // mislabel a model that actually supports temperature.
                 if (temperatureStripped) markTemperatureUnsupported(model);
+                // Same deferred-learning for the `thinking` param: only mark the
+                // model on a 2xx after stripping, so a regex false-positive on an
+                // unrelated 400 can't permanently mislabel a thinking-capable
+                // model.
+                if (thinkingStripped) markThinkingUnsupported(model);
 
                 // Guard: some providers return SSE even when stream: false
                 // was sent. Extract JSON from the data: lines instead.
@@ -1636,6 +1787,7 @@ export function createGatewayLLMClient(
                     opts?.sessionID,
                     effectiveTemperature,
                     factoryVertexProject,
+                    effectiveDisableThinking,
                   );
                   retryCount++;
                   continue;
@@ -1774,6 +1926,7 @@ export function createGatewayLLMClient(
                     opts?.sessionID,
                     effectiveTemperature,
                     factoryVertexProject,
+                    effectiveDisableThinking,
                   );
                   // Rebuilding restores the freshly-built header set, which
                   // resurrects a beta we may have already stripped at runtime
@@ -1787,6 +1940,48 @@ export function createGatewayLLMClient(
                   }
                   log.warn(
                     `worker 400 reports temperature is unsupported — retrying once without the temperature param ` +
+                      `(model=${model.providerID}/${model.modelID}, worker=${opts?.workerID ?? "unknown"}): ${text.slice(0, 160)}`,
+                  );
+                  retryCount++;
+                  continue;
+                }
+
+                // 400 + a "thinking is unsupported" complaint → the model rejects
+                // the `thinking:{type:"disabled"}` param we add for Claude workers
+                // (a model that predates the thinking API, e.g. older claude-3.x).
+                // Learn it so future calls omit the param upfront, then rebuild
+                // THIS request without it and retry once. Rebuilt via
+                // buildWorkerRequest (not string-editing req.body) so the OAuth
+                // billing signature is recomputed over the new body. Bounded to
+                // one retry per call; composes with the temperature/beta strips
+                // above (each rebuild uses the current effective values).
+                if (
+                  response.status === 400 &&
+                  !thinkingStripped &&
+                  effectiveDisableThinking &&
+                  isThinkingUnsupported400(text)
+                ) {
+                  thinkingStripped = true;
+                  effectiveDisableThinking = false;
+                  req = await buildWorkerRequest(
+                    target,
+                    activeCred,
+                    model,
+                    system,
+                    user,
+                    maxTokens,
+                    opts?.sessionID,
+                    effectiveTemperature,
+                    factoryVertexProject,
+                    effectiveDisableThinking,
+                  );
+                  // Preserve a runtime beta strip across this rebuild (same
+                  // reasoning as the temperature-strip path above).
+                  if (betaStripped) {
+                    req = { ...req, headers: stripBetaHeaders(req.headers) };
+                  }
+                  log.warn(
+                    `worker 400 reports thinking is unsupported — retrying once without the thinking param ` +
                       `(model=${model.providerID}/${model.modelID}, worker=${opts?.workerID ?? "unknown"}): ${text.slice(0, 160)}`,
                   );
                   retryCount++;
