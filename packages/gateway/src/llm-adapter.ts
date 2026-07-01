@@ -156,6 +156,68 @@ function isBetaRelated400(body: string): boolean {
 }
 
 /**
+ * Worker call sites set `temperature: 0` for reproducible distillation/curation.
+ * Newer models (e.g. Anthropic `claude-sonnet-5`) have DEPRECATED the sampling
+ * `temperature` param and reject any request that includes it with a 400
+ * ("`temperature` is deprecated for this model."), which breaks every worker on
+ * that model. We learn this fact at runtime — on the first such 400 — so
+ * subsequent worker calls omit `temperature` upfront instead of burning a
+ * wasted round-trip per call. The set is intentionally NOT seeded from a
+ * hardcoded model list: hardcoding drifts as models ship and risks both false
+ * positives (stripping from a model that supports it) and misses (a new model
+ * we forgot). Runtime learning is always correct and self-healing. Keyed by
+ * `providerID/modelID`; in-memory, so it re-learns at most once per model per
+ * gateway lifetime after a restart.
+ */
+const temperatureUnsupportedModels = new Set<string>();
+
+/** Stable key for the temperature-capability set. */
+function workerModelKey(model: {
+  providerID: string;
+  modelID: string;
+}): string {
+  return `${model.providerID}/${model.modelID}`;
+}
+
+/** Record that a model rejects the `temperature` param (learned from a 400). */
+export function markTemperatureUnsupported(model: {
+  providerID: string;
+  modelID: string;
+}): void {
+  temperatureUnsupportedModels.add(workerModelKey(model));
+}
+
+/** Has this model been observed to reject the `temperature` param? */
+export function isTemperatureUnsupportedModel(model: {
+  providerID: string;
+  modelID: string;
+}): boolean {
+  return temperatureUnsupportedModels.has(workerModelKey(model));
+}
+
+/** Test-only: clear the learned temperature-capability set. */
+export function _resetTemperatureUnsupportedModels(): void {
+  temperatureUnsupportedModels.clear();
+}
+
+/**
+ * Heuristic: does a 400 body indicate the request's `temperature` param is not
+ * accepted by this model? Matches Anthropic's "`temperature` is deprecated for
+ * this model." and OpenAI-style "Unsupported parameter: temperature" / "...
+ * not supported ..." shapes. Requires the word `temperature` AND a rejection
+ * verb so an unrelated 400 that merely mentions temperature can't trigger the
+ * one-shot temperature-stripped retry.
+ */
+function isTemperatureUnsupported400(body: string): boolean {
+  return (
+    /temperature/i.test(body) &&
+    /\b(deprecated|unsupported|no\s+longer\s+supported|not\s+(?:a\s+)?support(?:ed)?|removed|not\s+allowed|cannot\s+be\s+(?:set|used|specified))\b/i.test(
+      body,
+    )
+  );
+}
+
+/**
  * Unified retry policy (modeled on Claude Code's `getRetryDelay`).
  *
  * A single policy governs every worker call — urgent or background, 429 or
@@ -1211,16 +1273,31 @@ export function createGatewayLLMClient(
         }
       }
 
+      // Resolve the effective sampling temperature. Models we've already
+      // observed to reject `temperature` (see markTemperatureUnsupported) get
+      // it omitted upfront so we don't burn a wasted 400 round-trip per call.
+      // A runtime-learned 400 below flips this to undefined for the retry.
+      let effectiveTemperature = isTemperatureUnsupportedModel(model)
+        ? undefined
+        : opts?.temperature;
+
+      // The credential in effect for the CURRENT attempt. Starts as `cred`; an
+      // auth-error refresh reassigns it so every later rebuild in the retry loop
+      // (e.g. the temperature-strip rebuild) signs with the fresh key rather
+      // than the stale one that just 401'd. Typed non-null (assigned only from
+      // non-null values) so the closure keeps the `if (!cred)` guard's narrowing.
+      let activeCred: AuthCredential = cred;
+
       // Build protocol-specific request
       let req = await buildWorkerRequest(
         target,
-        cred,
+        activeCred,
         model,
         system,
         user,
         maxTokens,
         opts?.sessionID,
-        opts?.temperature,
+        effectiveTemperature,
         factoryVertexProject,
       );
 
@@ -1258,6 +1335,9 @@ export function createGatewayLLMClient(
             // Strip beta headers at most once per call (runtime fallback for a
             // beta-related 400 — see the non-transient block below).
             let betaStripped = false;
+            // Strip the temperature param at most once per call (runtime
+            // fallback for a "temperature is deprecated" 400 — see below).
+            let temperatureStripped = false;
             // Resolve the retry budget once per call (not per attempt) — the
             // value can't change mid-loop and re-reading the env each iteration
             // is wasteful.
@@ -1298,6 +1378,14 @@ export function createGatewayLLMClient(
               finalStatus = response.status;
 
               if (response.ok) {
+                // If a prior attempt stripped `temperature` and the request now
+                // succeeds (2xx), temperature really was the culprit — learn it
+                // so future calls to this model omit it upfront. Deferred to
+                // success (rather than marking on the 400 heuristic match) so a
+                // regex false-positive on an unrelated 400 can never permanently
+                // mislabel a model that actually supports temperature.
+                if (temperatureStripped) markTemperatureUnsupported(model);
+
                 // Guard: some providers return SSE even when stream: false
                 // was sent. Extract JSON from the data: lines instead.
                 const ct = response.headers.get("content-type") ?? "";
@@ -1531,19 +1619,22 @@ export function createGatewayLLMClient(
                 const credentialChanged =
                   !!freshCred && freshCred.value !== cred.value;
                 if (credentialChanged && attempt === 0) {
-                  // Credential changed — rebuild request and retry once
+                  // Credential changed — adopt it as the current credential so
+                  // any subsequent rebuild (e.g. the temperature-strip retry)
+                  // uses the fresh key, then rebuild request and retry once.
+                  activeCred = freshCred;
                   log.info(
                     `worker auth error ${response.status}, credential refreshed — retrying: ${text.slice(0, 200)}`,
                   );
                   req = await buildWorkerRequest(
                     target,
-                    freshCred,
+                    activeCred,
                     model,
                     system,
                     user,
                     maxTokens,
                     opts?.sessionID,
-                    opts?.temperature,
+                    effectiveTemperature,
                     factoryVertexProject,
                   );
                   retryCount++;
@@ -1650,6 +1741,52 @@ export function createGatewayLLMClient(
                   req = { ...req, headers: stripBetaHeaders(req.headers) };
                   log.warn(
                     `worker 400 looks long-context-beta-related — retrying once without the context-1m beta ` +
+                      `(model=${model.providerID}/${model.modelID}, worker=${opts?.workerID ?? "unknown"}): ${text.slice(0, 160)}`,
+                  );
+                  retryCount++;
+                  continue;
+                }
+
+                // 400 + a "temperature is deprecated/unsupported" complaint →
+                // the request carries a `temperature` the model rejects (newer
+                // models like claude-sonnet-5 dropped the sampling param). Learn
+                // it so future calls omit temperature upfront, then rebuild THIS
+                // request without temperature and retry once. We rebuild via
+                // buildWorkerRequest rather than string-editing req.body so the
+                // OAuth billing signature is recomputed over the new body
+                // (mutating the serialized body would invalidate the cch hash).
+                // Bounded to one retry per call.
+                if (
+                  response.status === 400 &&
+                  !temperatureStripped &&
+                  effectiveTemperature != null &&
+                  isTemperatureUnsupported400(text)
+                ) {
+                  temperatureStripped = true;
+                  effectiveTemperature = undefined;
+                  req = await buildWorkerRequest(
+                    target,
+                    activeCred,
+                    model,
+                    system,
+                    user,
+                    maxTokens,
+                    opts?.sessionID,
+                    effectiveTemperature,
+                    factoryVertexProject,
+                  );
+                  // Rebuilding restores the freshly-built header set, which
+                  // resurrects a beta we may have already stripped at runtime
+                  // (the upfront capability filter KEEPS context-1m for a
+                  // 1M-capable model like sonnet-5, so a subscription-not-
+                  // entitled beta 400 is only cured by the runtime strip). If a
+                  // model needed BOTH fixes, re-apply the beta strip so the
+                  // temperature rebuild doesn't regress it into a beta-400 loop.
+                  if (betaStripped) {
+                    req = { ...req, headers: stripBetaHeaders(req.headers) };
+                  }
+                  log.warn(
+                    `worker 400 reports temperature is unsupported — retrying once without the temperature param ` +
                       `(model=${model.providerID}/${model.modelID}, worker=${opts?.workerID ?? "unknown"}): ${text.slice(0, 160)}`,
                   );
                   retryCount++;
