@@ -55,12 +55,12 @@ about you, so they are not subject to the same erosion as things Lore inferred.&
 &lt;p&gt;Opposing rules are never quietly merged. “Always use tabs” and “always use spaces” are not
 two versions of one fact, and collapsing them would be Lore deciding for you. Both are kept
 and ranked by confidence.&lt;/p&gt;
-&lt;p&gt;A genuine contradiction still needs settling, so Lore looks for these in the background and
-flags the pair for you: on the knowledge dashboard, or from &lt;code&gt;lore data contradictions&lt;/code&gt;. You
-pick the rule that still holds, or you keep both. Lore never merges them and never deletes the
-losing side on its own. The layer’s job here is narrow on purpose: notice the conflict and hand
-it to you. Picking a winner silently is exactly the kind of decision a memory system should not
-be making.&lt;/p&gt;
+&lt;p&gt;Genuine contradictions still need settling, so Lore looks for them in the background and flags
+each pair for you: on the knowledge dashboard, or from &lt;code&gt;lore data contradictions&lt;/code&gt;. You pick the
+rule that still holds, or you keep both. Lore never merges them and never deletes the losing
+side on its own. The layer’s job here is narrow on purpose: notice the conflict and hand it to
+you. Picking a winner silently is exactly the kind of decision a memory system should not be
+making.&lt;/p&gt;
 &lt;h2 id=&quot;nothing-is-really-deleted&quot;&gt;Nothing is really deleted&lt;/h2&gt;
 &lt;p&gt;Knowledge is append-only. An edit writes a new version and keeps the old one; a delete leaves
 a marker rather than erasing the trail. Because the history is intact, you can diff what your
