@@ -1,4 +1,158 @@
 # Changelog
+## 0.35.0
+
+### New Features ✨
+
+#### Cch
+
+- Add seeds for Claude Code up to 2.1.198 by @github-actions in [#1117](https://github.com/BYK/loreai/pull/1117)
+- Add seeds for Claude Code up to 2.1.197 by @github-actions in [#1073](https://github.com/BYK/loreai/pull/1073)
+- Add seeds for Claude Code up to 2.1.196 by @github-actions in [#1053](https://github.com/BYK/loreai/pull/1053)
+- Add seeds for Claude Code up to 2.1.195 by @github-actions in [#1031](https://github.com/BYK/loreai/pull/1031)
+
+#### Core
+
+- Show cumulative temporal re-chunk progress in logs by @BYK in [#1152](https://github.com/BYK/loreai/pull/1152)
+- Detect & surface knowledge contradictions — engine + CLI (#1123) by @BYK in [#1146](https://github.com/BYK/loreai/pull/1146)
+- Make the local-embedding stack an optional dependency (#1026) by @BYK in [#1128](https://github.com/BYK/loreai/pull/1128)
+- Re-chunk existing temporal messages into vec0 multi-vector on startup by @BYK in [#1087](https://github.com/BYK/loreai/pull/1087)
+- Split read-path awaited timer into embed vs vectorSearch (#999) by @BYK in [#1074](https://github.com/BYK/loreai/pull/1074)
+- Embed temporal messages as one vec0 chunk per part-aware unit by @BYK in [#1068](https://github.com/BYK/loreai/pull/1068)
+- Harden vec0 rollout with a load-time KNN smoke guard by @BYK in [#1062](https://github.com/BYK/loreai/pull/1062)
+- Collapse temporal chunk hits to max-sim message hits by @BYK in [#1063](https://github.com/BYK/loreai/pull/1063)
+- Embed part-selective text for temporal messages by @BYK in [#1061](https://github.com/BYK/loreai/pull/1061)
+- Cut vector storage over to FLAT vec0 with partition keys by @BYK in [#1051](https://github.com/BYK/loreai/pull/1051)
+- Traverse the entity graph during recall (entity-graph fan-in) by @BYK in [#1047](https://github.com/BYK/loreai/pull/1047)
+
+#### Gateway
+
+- Npm bundle prefers native ONNX Runtime, falls back to WASM (2/3) by @BYK in [#1149](https://github.com/BYK/loreai/pull/1149)
+- Contradictions banner on /ui/knowledge — resolve/dismiss (#1123) by @BYK in [#1147](https://github.com/BYK/loreai/pull/1147)
+- Per-platform @loreai/onnxruntime-<os>-<arch> package generator (1/3) by @BYK in [#1148](https://github.com/BYK/loreai/pull/1148)
+- Tag cache-bust metric with idle_resume (separate avoidable warm rewrites from free cold ones) by @BYK in [#1130](https://github.com/BYK/loreai/pull/1130)
+- Binary smoke for the read-worker offload seam (#1029) by @BYK in [#1122](https://github.com/BYK/loreai/pull/1122)
+- Runtime + UI toggle to disable cache warming by @BYK in [#1114](https://github.com/BYK/loreai/pull/1114)
+- Surface warmup net (savings − cost) in cost log and UI by @BYK in [#1112](https://github.com/BYK/loreai/pull/1112)
+- Idle-gate the temporal re-chunk backfill against live traffic by @BYK in [#1108](https://github.com/BYK/loreai/pull/1108)
+- Resolve worker model to newest in family by @BYK in [#1086](https://github.com/BYK/loreai/pull/1086)
+- Ship native sqlite-vec in the standalone binary by @BYK in [#1030](https://github.com/BYK/loreai/pull/1030)
+
+#### Setup
+
+- Add `lore setup hermes` handler (#648, part 2) by @BYK in [#1141](https://github.com/BYK/loreai/pull/1141)
+- Add `lore setup pi` handler (#648, part 1) by @BYK in [#1139](https://github.com/BYK/loreai/pull/1139)
+
+#### Website
+
+- Prune orphaned standard.site document records by @BYK in [#1043](https://github.com/BYK/loreai/pull/1043)
+- Implement the standard.site protocol for the blog by @BYK in [#1037](https://github.com/BYK/loreai/pull/1037)
+- Add full-content RSS feed for the blog by @BYK in [#1035](https://github.com/BYK/loreai/pull/1035)
+
+#### Other
+
+- (release) Publish per-platform @loreai/onnxruntime-* packages (3/3) by @BYK in [#1150](https://github.com/BYK/loreai/pull/1150)
+- (telemetry) P50/p95 vector KNN read-latency to confirm the vec0 win (#1065) by @BYK in [#1095](https://github.com/BYK/loreai/pull/1095)
+- Vendor sqlite-vec 0.1.10 with DiskANN + rescore by @BYK in [#1038](https://github.com/BYK/loreai/pull/1038)
+
+### Bug Fixes 🐛
+
+#### Core
+
+- Re-point vec0 partition keys when a session/project moves (#1138) by @BYK in [#1140](https://github.com/BYK/loreai/pull/1140)
+- Reclaim vec0 orphans on non-prune base-row deletes (#1132) by @BYK in [#1137](https://github.com/BYK/loreai/pull/1137)
+- Bound embedding cap by the fixed WASM heap ceiling (#999) by @BYK in [#1134](https://github.com/BYK/loreai/pull/1134)
+- Drop pruned rows' vec0 chunks so orphans don't accumulate by @BYK in [#1129](https://github.com/BYK/loreai/pull/1129)
+- Surface skipped-blob count + arm temporal walk on vec0 cutover by @BYK in [#1101](https://github.com/BYK/loreai/pull/1101)
+- Silence transformers.js input-tensor dump on expected embed OOM by @BYK in [#1120](https://github.com/BYK/loreai/pull/1120)
+- Drain distillation background work in tests (#885 DB-isolation flake) by @BYK in [#1116](https://github.com/BYK/loreai/pull/1116)
+- Preserve warm prefix caches across idle resume by @BYK in [#1102](https://github.com/BYK/loreai/pull/1102)
+- Checkpoint temporal re-chunk cursor per row + log backlog/progress by @BYK in [#1104](https://github.com/BYK/loreai/pull/1104)
+- Skip stale-dimension blobs during vec0 cutover instead of aborting by @BYK in [#1098](https://github.com/BYK/loreai/pull/1098)
+- Make temporal.prune resilient to db()-swap missing-table race (#1001) by @BYK in [#1071](https://github.com/BYK/loreai/pull/1071)
+- Bound and sub-batch temporal multi-vector chunk fan-out (#1072) by @BYK in [#1075](https://github.com/BYK/loreai/pull/1075)
+
+#### Gateway
+
+- Don't re-anchor the durable delta on a warm idle resume (kills the #1 cache-bust) by @BYK in [#1151](https://github.com/BYK/loreai/pull/1151)
+- Block cache warming for sessions under emergency compaction by @BYK in [#1121](https://github.com/BYK/loreai/pull/1121)
+- Show historical cache-warming row when only a cost was incurred (Sentry bot) by @BYK in [#1118](https://github.com/BYK/loreai/pull/1118)
+- Credit warmup hits pro-rata, not the full refreshed prefix by @BYK in [#1105](https://github.com/BYK/loreai/pull/1105)
+- Extend worker temperature-deprecation handling to the batch path by @BYK in [#1110](https://github.com/BYK/loreai/pull/1110)
+- Resolve worker capability from the canonical vendor (follow-up to #1109) by @BYK in [#1113](https://github.com/BYK/loreai/pull/1113)
+- Gate temporal re-chunk backfill on embed-pool idle, not session activity by @BYK in [#1111](https://github.com/BYK/loreai/pull/1111)
+- Stop sonnet-5 workers breaking (adaptive thinking + deprecated sampling), data-driven via models.dev by @BYK in [#1109](https://github.com/BYK/loreai/pull/1109)
+- Drop deprecated temperature param on worker 400 by @BYK in [#1100](https://github.com/BYK/loreai/pull/1100)
+- Surface real batch item errors instead of 'error: undefined' by @BYK in [#1099](https://github.com/BYK/loreai/pull/1099)
+- Reconstruct zai worker path under /v4 instead of doubling /v1 (#1093) by @BYK in [#1097](https://github.com/BYK/loreai/pull/1097)
+- Route reconstructed openai requests host-aware for Google (#1070) by @BYK in [#1076](https://github.com/BYK/loreai/pull/1076)
+- Forward github-copilot to its real /chat/completions endpoint (#1052) by @BYK in [#1066](https://github.com/BYK/loreai/pull/1066)
+- Scope upstream re-compression by destination origin (#1032) by @BYK in [#1064](https://github.com/BYK/loreai/pull/1064)
+- Scope upstream re-compression to the client's provider (#1032) by @BYK in [#1059](https://github.com/BYK/loreai/pull/1059)
+- Decode and re-compress zstd request bodies from Codex (#1032) by @BYK in [#1049](https://github.com/BYK/loreai/pull/1049)
+
+#### Other
+
+- (cost-tracker) Per-model auto-compact threshold for the avoided-compactions estimate (#983) by @BYK in [#1096](https://github.com/BYK/loreai/pull/1096)
+- (embedding) Keep the worker thread's stderr off the host TUI by @BYK in [#1055](https://github.com/BYK/loreai/pull/1055)
+- (pi) Stop the extension from corrupting Pi's TUI by @BYK in [#1036](https://github.com/BYK/loreai/pull/1036)
+- (plugins) Keep the in-process gateway from corrupting the host TUI by @BYK in [#1050](https://github.com/BYK/loreai/pull/1050)
+- (website) Cap standard.site document textContent size by @BYK in [#1045](https://github.com/BYK/loreai/pull/1045)
+
+### Documentation 📚
+
+#### Website
+
+- Publish Lore memory-management principles post (#1125) by @BYK in [#1131](https://github.com/BYK/loreai/pull/1131)
+- Frame Lore as continual learning in token space (#1124) by @BYK in [#1127](https://github.com/BYK/loreai/pull/1127)
+- Tighten "Why memory is not enough" blog post by @BYK in [#1034](https://github.com/BYK/loreai/pull/1034)
+
+#### Other
+
+- (core) Clarify blob-fallback recency caps; note chunk-policy re-arm for future migrations by @BYK in [#1133](https://github.com/BYK/loreai/pull/1133)
+- (gateway) Document verified `HERMES_INFERENCE_PROVIDER` behavior (#649) by @BYK in [#1142](https://github.com/BYK/loreai/pull/1142)
+
+### Internal Changes 🔧
+
+#### Core
+
+- Rename WASM_SUSTAINABLE_MAX_TOKENS → EMBED_TOKEN_CEILING by @BYK in [#1145](https://github.com/BYK/loreai/pull/1145)
+- Remove unused getOriginalFetch() accessor by @BYK in [#1119](https://github.com/BYK/loreai/pull/1119)
+- Parallelize embedding into a memory-gated worker pool (#999) by @BYK in [#1115](https://github.com/BYK/loreai/pull/1115)
+- Share fetch-interceptor original-fetch via Symbol.for global by @BYK in [#1103](https://github.com/BYK/loreai/pull/1103)
+- Batch action-tag session counts into one distillations scan (#1023) by @BYK in [#1069](https://github.com/BYK/loreai/pull/1069)
+- Chunk unbounded IN in offloaded alias-batch helpers (#1022) by @BYK in [#1067](https://github.com/BYK/loreai/pull/1067)
+- Offload entity-graph knowledge hydration in recall (#1048) by @BYK in [#1057](https://github.com/BYK/loreai/pull/1057)
+- De-flake embedding OOM recovery (env-independent start cap) by @BYK in [#1054](https://github.com/BYK/loreai/pull/1054)
+- Vec storage-mode seam (read-mode + write helpers) by @BYK in [#1044](https://github.com/BYK/loreai/pull/1044)
+
+#### Gateway
+
+- Run native onnxruntime-node (not WASM) in the SEA binary by @BYK in [#1143](https://github.com/BYK/loreai/pull/1143)
+- Inline @loreai/core into the Bun bundle, drop external-core dep by @BYK in [#1106](https://github.com/BYK/loreai/pull/1106)
+- Memoize worker-model resolution per models.dev snapshot by @BYK in [#1094](https://github.com/BYK/loreai/pull/1094)
+- Cover the off-thread read-worker vec path in --check-vec (#1033) by @BYK in [#1060](https://github.com/BYK/loreai/pull/1060)
+
+#### Hermes
+
+- Detect real ContextEngine ABC drift against installed hermes-agent (#1136) by @BYK in [#1144](https://github.com/BYK/loreai/pull/1144)
+- Enforce the real ContextEngine ABC contract in CI (#1042) by @BYK in [#1135](https://github.com/BYK/loreai/pull/1135)
+- Run the lore-hermes Python plugin tests in CI by @BYK in [#1040](https://github.com/BYK/loreai/pull/1040)
+
+#### Ltm
+
+- Offload peekProjectRefs knowledge scan to the read-worker pool by @BYK in [#1091](https://github.com/BYK/loreai/pull/1091)
+- Offload forProject() scans to the read-worker pool by @BYK in [#1088](https://github.com/BYK/loreai/pull/1088)
+
+#### Other
+
+- (cache-analytics) Memoize normalized previous body across turns by @BYK in [#1085](https://github.com/BYK/loreai/pull/1085)
+- (entities) Offload the project entity-catalog scan to the read-worker pool by @BYK in [#1089](https://github.com/BYK/loreai/pull/1089)
+- (gradient) Pre-load the distillation snapshot off-thread before transform() by @BYK in [#1090](https://github.com/BYK/loreai/pull/1090)
+- (pi) Exercise the extension against the real Pi runtime by @BYK in [#1046](https://github.com/BYK/loreai/pull/1046)
+- (pi,opencode) Basic e2e tests for the plugin adapters by @BYK in [#1039](https://github.com/BYK/loreai/pull/1039)
+- (pipeline) Batch post-response temporal writes into one transaction by @BYK in [#1092](https://github.com/BYK/loreai/pull/1092)
+- (vec) Return to upstream sqlite-vec 0.1.9, drop the vendored fork by @BYK in [#1058](https://github.com/BYK/loreai/pull/1058)
+
 ## 0.34.0
 
 ### New Features ✨
