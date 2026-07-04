@@ -4,28 +4,145 @@
  * Verifies that:
  * - Every file referenced by package.json `files` and `exports` exists
  * - The CJS Node bundle uses node:sqlite (not bun:sqlite)
- * - The imported module exports the expected public API
+ * - @loreai/core is inlined (not externalized) in the Bun bundle (#1027)
  *
- * Requires the bundle (`pnpm --filter @loreai/gateway run bundle`) to have
- * been built. The root `pretest` script runs the bundle automatically before
- * `pnpm test`, so this test runs in every environment (local + CI). The
- * skipIf guard is defensive — it should never trigger in normal use, but
- * ensures a missing bundle is reported as a skip rather than a confusing
- * file-not-found assertion failure.
+ * These assert on the built `dist/` artifacts. A bundle build runs immediately
+ * before vitest under `pnpm test` (root `pretest` hook) and `pnpm run
+ * test:coverage` (its own `bundle &&` chain, used by CI) — but NOT for
+ * `vitest --watch`, IDE test runners, or a direct `vitest run`. After pulling a
+ * change to the bundle's inputs (e.g. #1027 inlining @loreai/core) WITHOUT
+ * rebuilding, those launch paths would otherwise assert against a stale/missing
+ * artifact that no longer reflects source — the "bundle-export tests are
+ * failing on latest main" trap.
+ *
+ * Rather than SKIP when the artifact is stale/missing (which silently drops
+ * these checks in the local dev loop — a footgun), the suite REBUILDS the
+ * bundle on demand in `beforeAll`, so it always runs against a bundle built
+ * from current source no matter how vitest was launched. The rebuild is gated
+ * on freshness, so it is a no-op when the bundle is already current: CI builds
+ * the bundle as the last step before vitest (after checkout/build/typecheck/
+ * lint) and a manual `pnpm run bundle` leaves it newer than every source —
+ * neither triggers a redundant rebuild.
+ *
+ * The rebuild wipes + recreates `dist/`, but nothing else reads `dist/` during
+ * a test run: vitest's top-level `resolve.alias` (vitest.config.ts) redirects
+ * every `@loreai/*` import — including the variable dynamic imports in
+ * gateway-smoke and the opencode plugin — to `src`, and core's worker_threads
+ * resolve to their `.ts` siblings under vitest, never `dist/`. With
+ * `pool: "forks"` on top, the rebuild cannot race another test file.
  */
-import { describe, test, expect } from "vitest";
-import { existsSync, readFileSync } from "node:fs";
+import { beforeAll, describe, test, expect } from "vitest";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { execSync } from "node:child_process";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const packageDir = join(fileURLToPath(import.meta.url), "..", "..");
+const repoRoot = join(packageDir, "..", "..");
 const distDir = join(packageDir, "dist");
+const coreSrcDir = join(packageDir, "..", "core", "src");
 const pkgJson = JSON.parse(
   readFileSync(join(packageDir, "package.json"), "utf8"),
 );
-const hasBundle = existsSync(join(distDir, "index.cjs"));
 
-describe.skipIf(!hasBundle)("bundle exports", () => {
+const cjsBundlePath = join(distDir, "index.cjs");
+const bunBundlePath = join(distDir, "index.bun.js");
+
+/** Newest mtime (ms) across the given files/directories; dirs walk recursively.
+ *  Unreadable files/dirs are skipped rather than crashing the walk. */
+function newestMtimeMs(roots: string[]): number {
+  let newest = 0;
+  const stack = [...roots];
+  while (stack.length > 0) {
+    const p = stack.pop() as string;
+    let st: ReturnType<typeof statSync>;
+    try {
+      st = statSync(p);
+    } catch {
+      continue;
+    }
+    if (st.isDirectory()) {
+      try {
+        for (const entry of readdirSync(p)) stack.push(join(p, entry));
+      } catch {
+        // Unreadable directory — skip it rather than crash the walk.
+      }
+    } else if (st.mtimeMs > newest) {
+      newest = st.mtimeMs;
+    }
+  }
+  return newest;
+}
+
+/** Oldest mtime (ms) across the given files; a missing file counts as 0. */
+function oldestMtimeMs(files: string[]): number {
+  let oldest = Number.POSITIVE_INFINITY;
+  for (const f of files) {
+    try {
+      oldest = Math.min(oldest, statSync(f).mtimeMs);
+    } catch {
+      return 0;
+    }
+  }
+  return Number.isFinite(oldest) ? oldest : 0;
+}
+
+// The bundle is fresh iff both asserted artifacts exist and are strictly newer
+// than every source the bundle is built from:
+//   - gateway/src + core/src — both inlined into the bundle;
+//   - script/ — the whole build-script dir, since bundle.ts imports siblings
+//     (the ORT plugins, debug-id, import-meta-url); tracking only bundle.ts
+//     would miss a build change made in one of those and falsely report fresh;
+//   - package.json — drives the files/exports/deps assertions.
+// Dependency upgrades (node_modules / the ORT wasm) are intentionally NOT
+// tracked here — those arrive via `pnpm install`, whose postinstall rebuilds the
+// bundle. Ties resolve toward rebuilding (strict `>`): a rebuild is cheap and
+// always correct, so err on that side rather than risk asserting against a
+// same-timestamp stale artifact.
+function isBundleFresh(): boolean {
+  const newestSource = newestMtimeMs([
+    join(packageDir, "src"),
+    coreSrcDir,
+    join(packageDir, "script"),
+    join(packageDir, "package.json"),
+  ]);
+  const oldestArtifact = oldestMtimeMs([cjsBundlePath, bunBundlePath]);
+  return oldestArtifact > 0 && oldestArtifact > newestSource;
+}
+
+describe("bundle exports", () => {
+  // Build the bundle from current source when it is missing or stale, so the
+  // assertions below never run against an artifact that predates source (see
+  // the file header for why skipping would be a local footgun). No-op when the
+  // bundle is already fresh — CI's pre-vitest bundle build and a manual
+  // `pnpm run bundle` both leave it newer than every source, so this never
+  // double-builds.
+  beforeAll(() => {
+    if (isBundleFresh()) return;
+    process.stderr.write(
+      "[bundle-exports] dist/ bundle missing or stale — building it " +
+        "(pnpm --filter @loreai/gateway run bundle)…\n",
+    );
+    try {
+      // execSync goes through the platform shell (a fixed literal command, no
+      // interpolation), so it resolves `pnpm.cmd` on Windows — execFile("pnpm")
+      // would ENOENT there because a .cmd is not directly executable.
+      execSync("pnpm --filter @loreai/gateway run bundle", {
+        cwd: repoRoot,
+        stdio: "pipe",
+        encoding: "utf8",
+      });
+    } catch (err) {
+      const e = err as { stdout?: string; stderr?: string; message?: string };
+      throw new Error(
+        "Failed to build the @loreai/gateway bundle required by " +
+          "bundle-exports.test.ts. Run `pnpm --filter @loreai/gateway run " +
+          "bundle` to reproduce.\n" +
+          `${e.stderr ?? ""}${e.stdout ?? ""}${e.message ?? String(err)}`,
+      );
+    }
+  }, 300_000);
+
   // -------------------------------------------------------------------------
   // Layer 1: Static content checks
   // -------------------------------------------------------------------------
@@ -66,10 +183,10 @@ describe.skipIf(!hasBundle)("bundle exports", () => {
     // external-core runtime dep and its ~480 MB ML tree (#1024/#1026).
     const content = readFileSync(join(distDir, "index.bun.js"), "utf8");
 
-    // Dev shim (`export * from "../src/index.ts";`) is not the real artifact,
-    // so there is nothing to assert. The real minified bundle is present under
-    // `pnpm test` because the root `pretest` runs
-    // `pnpm --filter @loreai/gateway run bundle`.
+    // Defensive: the `beforeAll` above guarantees a freshly-built (real,
+    // minified) bundle, so this dev-shim (`export * from "../src/index.ts"`)
+    // branch is normally unreachable. Kept so a hand-placed shim degrades to a
+    // no-op assert instead of scanning re-export syntax.
     if (content.trimStart().startsWith("export *")) return;
 
     // Match import CONTEXTS only — static `from "@loreai/x"` and dynamic
