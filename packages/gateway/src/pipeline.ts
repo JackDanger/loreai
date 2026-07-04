@@ -167,6 +167,15 @@ import {
 } from "./stream/openai-responses";
 import { translateAnthropicStreamToOpenAI } from "./stream/openai";
 import {
+  buildGeminiUpstreamRequest,
+  buildGeminiResponse,
+  parseGeminiResponseJSON,
+} from "./translate/gemini";
+import {
+  accumulateGeminiSSEStream,
+  translateAnthropicStreamToGemini,
+} from "./stream/gemini";
+import {
   createStreamAccumulator,
   createRecallAwareAccumulator,
   parseSSEStream,
@@ -433,6 +442,9 @@ export function stripContextWarnings(messages: GatewayMessage[]): void {
  * output on user messages for commit indicators. Used to trigger curation at
  * commit boundaries — natural checkpoints where decisions crystallize.
  */
+/** Default upstream origin for native Gemini (Generative Language API). */
+const GEMINI_DEFAULT_UPSTREAM = "https://generativelanguage.googleapis.com";
+
 const GIT_COMMIT_RE = /\bgit\s+commit\b/i;
 function containsGitCommit(req: GatewayRequest): boolean {
   for (const msg of req.messages) {
@@ -2641,6 +2653,9 @@ function syntheticToolUseResponse(
     if (req.protocol === "openai-responses") {
       return translateAnthropicStreamToResponses(anthropicSSE);
     }
+    if (req.protocol === "gemini") {
+      return translateAnthropicStreamToGemini(anthropicSSE);
+    }
     return anthropicSSE;
   }
 
@@ -3342,7 +3357,12 @@ type UpstreamResult = {
   /** The serialized JSON body sent to the upstream provider. */
   serializedBody: string;
   /** The wire protocol used for the upstream request (may differ from ingress). */
-  effectiveProtocol: "anthropic" | "openai" | "openai-responses" | "vertex";
+  effectiveProtocol:
+    | "anthropic"
+    | "openai"
+    | "openai-responses"
+    | "vertex"
+    | "gemini";
 };
 
 /**
@@ -3432,7 +3452,18 @@ async function forwardToUpstream(
   const effectiveProtocol =
     req.protocol === "openai-responses"
       ? "openai-responses"
-      : (providerRouteUsable?.protocol ?? modelRoute?.protocol ?? req.protocol);
+      : req.protocol === "gemini"
+        ? // A native Gemini ingress ALWAYS stays gemini. The provider route still
+          // supplies the upstream URL (e.g. X-Lore-Provider: google →
+          // generativelanguage), but its protocol must not downgrade a native
+          // generateContent request: the `gemini-` model-prefix route and the
+          // `google` provider route are both the OpenAI-compat layer
+          // (protocol "openai"), which would wrongly re-translate to Chat
+          // Completions. opencode/pi's @ai-sdk/google speaks native generateContent.
+          "gemini"
+        : (providerRouteUsable?.protocol ??
+          modelRoute?.protocol ??
+          req.protocol);
 
   // Self-URL-building routes derive their base from config (region), not from
   // the route tables. This must take precedence over `modelRoute?.url`: a
@@ -3460,7 +3491,12 @@ async function forwardToUpstream(
     modelRoute?.url ??
     (effectiveProtocol === "anthropic"
       ? config.upstreamAnthropic
-      : config.upstreamOpenAI);
+      : effectiveProtocol === "gemini"
+        ? // Native Gemini default upstream (Generative Language API). `gemini-*`
+          // models resolve this via modelRoute.url already; this covers a native
+          // gemini ingress whose model id doesn't match the `gemini-` prefix.
+          GEMINI_DEFAULT_UPSTREAM
+        : config.upstreamOpenAI);
 
   // Warn when a provider route exists but has no URL and no header override —
   // the request will fall through to config defaults which likely have wrong
@@ -3580,6 +3616,24 @@ async function forwardToUpstream(
     url = vt.url;
     headers = vt.headers;
     body = vt.body;
+  } else if (effectiveProtocol === "gemini") {
+    // Google Gemini native generateContent. Inject LTM into the system prompt
+    // (Gemini maps `system` → `systemInstruction`), same as the OpenAI branches
+    // above — Anthropic-style separate system blocks don't apply here.
+    const ltmParts = [cache?.stableLtmSystem, cache?.ltmSystem].filter(Boolean);
+    const reqWithLtm = ltmParts.length
+      ? {
+          ...req,
+          system: [req.system, ...ltmParts].filter(Boolean).join("\n\n"),
+        }
+      : req;
+    const result = buildGeminiUpstreamRequest(
+      reqWithLtm,
+      effectiveUpstreamBase,
+    );
+    url = result.url;
+    headers = result.headers;
+    body = result.body;
   } else {
     // For non-native-Anthropic upstreams (MiniMax, Fireworks, etc.), downgrade
     // extended cache TTL ("1h") to standard 5-minute ephemeral — the "1h" TTL
@@ -4258,7 +4312,8 @@ async function accumulateNonStreamResponse(
     | "anthropic"
     | "openai"
     | "openai-responses"
-    | "vertex" = "anthropic",
+    | "vertex"
+    | "gemini" = "anthropic",
 ): Promise<GatewayResponse> {
   // Some providers (e.g. DeepSeek) return SSE-formatted responses even when
   // stream: false was sent. Detect this via content-type and extract the JSON
@@ -4277,6 +4332,8 @@ async function accumulateNonStreamResponse(
       return accumulateOpenAINonStreamJSON(json);
     case "openai-responses":
       return accumulateResponsesNonStreamJSON(json);
+    case "gemini":
+      return parseGeminiResponseJSON(json);
     default:
       // Anthropic (incl. Bedrock via bedrock-mantle, which returns the native
       // Anthropic non-streaming JSON shape).
@@ -4606,6 +4663,8 @@ function nonStreamHttpResponse(
       scaledResp,
       clientStream ?? false,
     );
+  } else if (clientProtocol === "gemini") {
+    clientResp = buildGeminiResponse(scaledResp, clientStream ?? false);
   } else {
     // Anthropic or unspecified — default format
     const body = buildAnthropicNonStreamResponse(scaledResp);
@@ -5124,12 +5183,16 @@ function postResponse(
       | "anthropic"
       | "openai"
       | "openai-responses"
-      | "vertex" =
+      | "vertex"
+      | "gemini" =
       req.protocol === "openai-responses"
         ? "openai-responses"
-        : (lpRouteUsable?.protocol ??
-          resolveUpstreamRoute(req.model)?.protocol ??
-          req.protocol);
+        : req.protocol === "gemini"
+          ? // Mirror forwardToUpstream: native gemini ingress always stays gemini.
+            "gemini"
+          : (lpRouteUsable?.protocol ??
+            resolveUpstreamRoute(req.model)?.protocol ??
+            req.protocol);
     // Mirror forwardToUpstream exactly (same shared predicate).
     const lpBedrockMantle = isBedrockMantleDispatch(
       lpRouteUsable,
@@ -5696,6 +5759,9 @@ async function handleCompaction(
     if (req.protocol === "openai-responses") {
       return translateAnthropicStreamToResponses(anthropicSSE);
     }
+    if (req.protocol === "gemini") {
+      return translateAnthropicStreamToGemini(anthropicSSE);
+    }
     return anthropicSSE;
   }
 
@@ -6109,6 +6175,9 @@ async function handlePassthrough(
       }
       if (req.protocol === "openai-responses") {
         return translateAnthropicStreamToResponses(anthropicSSE);
+      }
+      if (req.protocol === "gemini") {
+        return translateAnthropicStreamToGemini(anthropicSSE);
       }
     }
     // Other cross-protocol streaming combos: accumulate + re-emit
@@ -8080,6 +8149,13 @@ async function handleConversationTurn(
       return finalizeWithRecall(resp);
     }
 
+    if (effectiveProtocol === "gemini") {
+      // Gemini native streaming — accumulate the SSE frames, then re-emit via
+      // the recall-aware finalizer (same buffered pattern as the OpenAI paths).
+      const resp = await accumulateGeminiSSEStream(upstreamResponse);
+      return finalizeWithRecall(resp);
+    }
+
     // Anthropic streaming: forward events and accumulate in parallel.
     // Pass recall context so the accumulator can intercept recall tool_use.
     const hasRecallTool = modifiedReq.tools.some(
@@ -8105,6 +8181,9 @@ async function handleConversationTurn(
     }
     if (req.protocol === "openai-responses") {
       return translateAnthropicStreamToResponses(anthropicSSE);
+    }
+    if (req.protocol === "gemini") {
+      return translateAnthropicStreamToGemini(anthropicSSE);
     }
     return anthropicSSE;
   }
@@ -8729,6 +8808,9 @@ function slashResponse(
     }
     if (req.protocol === "openai-responses") {
       return translateAnthropicStreamToResponses(anthropicSSE);
+    }
+    if (req.protocol === "gemini") {
+      return translateAnthropicStreamToGemini(anthropicSSE);
     }
     return anthropicSSE;
   }

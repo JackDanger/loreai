@@ -787,6 +787,14 @@ const WORKER_DEFAULTS: Record<
     family: "gpt-codex",
     alreadyCheap: (id) => id.includes("mini") || id.includes("spark"),
   },
+  // NOTE: `google` is intentionally NOT listed here. A gemini session's worker
+  // PROTOCOL is resolved to "gemini" from the session snapshot
+  // (resolveWorkerProtocol), and its MODEL is resolved cost-aware by the generic
+  // findCheaperSameProviderModel path (which auto-picks the cheapest gemini
+  // family from models.dev — better than a hardcoded family pin). Adding a
+  // WORKER_DEFAULTS.google entry would override that with a fixed family and is
+  // unnecessary for correctness.
+  //
   // GitHub Copilot proxies multiple providers — match by model ID prefix.
   // No `family`: Copilot's family resolution is handled by
   // resolveGitHubCopilotWorker (model IDs use different formatting, e.g.
