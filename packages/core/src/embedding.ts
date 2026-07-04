@@ -38,6 +38,7 @@ import * as log from "./log";
 import { recordVecReadLatency } from "./vec-latency";
 import { buildEmbeddingText, buildEmbeddingUnits } from "./embedding-units";
 import { vendorModelInfo } from "./embedding-vendor";
+import { nativeIntraOpThreads } from "./ort-native";
 import {
   MIN_EMBED_TOKENS,
   MODEL_MAX_TOKENS,
@@ -139,11 +140,13 @@ export function _setConstrainedMemoryForTest(bytes: number | null): void {
   testConstrainedMemoryBytes = bytes;
 }
 
-/** The process's cgroup memory limit in bytes, or `0` if unconstrained / unknown
- *  / unsupported by the runtime. `process.constrainedMemory()` is libuv-backed
- *  (cgroup v1 + v2, no hard-coded paths) and returns `0` when unconstrained; it
- *  is present in both Node (≥18.15) and Bun. Read live — the paths that consume
- *  it (pool growth, cap init/re-probe) are infrequent, not per-embed. */
+/** The process's cgroup memory LIMIT in bytes (not free-within-limit), or `0` if
+ *  unconstrained / unknown / unsupported by the runtime. `process.constrainedMemory()`
+ *  is libuv-backed (cgroup v1 + v2, no hard-coded paths) and returns `0` when
+ *  unconstrained; it is present in both Node (≥18.15) and Bun. Read live: it's
+ *  cheap and the consuming paths are cap init/re-probe (infrequent) plus the pool
+ *  growth gate (only while all workers are busy and below the ceiling — never in
+ *  the single-worker or at-ceiling steady state). */
 function constrainedMemoryLimit(): number {
   if (testConstrainedMemoryBytes != null) return testConstrainedMemoryBytes;
   const fn = (process as { constrainedMemory?: () => number })
@@ -158,7 +161,14 @@ function constrainedMemoryLimit(): number {
  *  `freemem()` unchanged) when unconstrained or when the container limit exceeds
  *  host-reported free — so behavior on non-containerized / roomy hosts is
  *  identical to the pre-cgroup path. Use this for every memory-SIZING read;
- *  telemetry keeps raw `freemem()` so host vs container stays diagnosable. */
+ *  telemetry keeps raw `freemem()` so host vs container stays diagnosable.
+ *
+ *  Note the clamp uses the cgroup LIMIT, not free-within-limit: `min(hostFree,
+ *  limit)` can slightly overestimate available memory in a mid-size container
+ *  already using part of its budget, but that's deliberate — it's strictly ≤ the
+ *  pre-fix host figure, and the per-worker budget already reserves the transient
+ *  attention peak as headroom. Using cgroup free (`availableMemory()`) instead
+ *  would break the no-op guarantee on constrained-but-roomy hosts. */
 function containerFreeBytes(): number {
   return clampFreeToContainerLimit(freemem(), constrainedMemoryLimit());
 }
@@ -596,6 +606,10 @@ class LocalProvider implements EmbeddingProvider {
         modelId: this.modelId,
         dimensions: this.dimensions,
         maxTokens: this.maxTokens,
+        // Cgroup-CPU-aware native ORT intra-op cap, computed here on the main
+        // thread (the worker can't value-import ort-native). undefined = no-op
+        // (unconstrained host); applied on the native path only in the worker.
+        intraOpThreads: nativeIntraOpThreads(),
         vendorModel: vendor ? { localModelPath: vendor.localModelPath } : null,
         // Snapshot the host's silence state — the worker's own `globalThis`
         // can't see the main thread's flag (re-read on every OOM respawn).
