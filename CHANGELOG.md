@@ -1,4 +1,52 @@
 # Changelog
+## 0.36.0
+
+### New Features ✨
+
+#### Cch
+
+- Add seeds for Claude Code up to 2.1.201 by @github-actions in [#1164](https://github.com/BYK/loreai/pull/1164)
+- Add seeds for Claude Code up to 2.1.200 by @github-actions in [#1160](https://github.com/BYK/loreai/pull/1160)
+- Add seeds for Claude Code up to 2.1.199 by @github-actions in [#1154](https://github.com/BYK/loreai/pull/1154)
+
+#### Core
+
+- Local encryption key store + passphrase escrow (C-2, #825) by @BYK in [#1167](https://github.com/BYK/loreai/pull/1167)
+- Auto-target CLAUDE.md for Claude Code, AGENTS.md otherwise by @BYK in [#1163](https://github.com/BYK/loreai/pull/1163)
+- Client-side encryption primitives (C-1, #825) by @BYK in [#1162](https://github.com/BYK/loreai/pull/1162)
+- Sync knowledge_meta as a convergent PN-counter register (A2 3b-2) by @BYK in [#941](https://github.com/BYK/loreai/pull/941)
+
+#### Sync
+
+- Client-side encryption of knowledge content (C-4, #825) by @BYK in [#1171](https://github.com/BYK/loreai/pull/1171)
+- Remote mirror for the encryption key store (C-3, #825) by @BYK in [#1169](https://github.com/BYK/loreai/pull/1169)
+
+#### Other
+
+- (supabase) Remote knowledge_meta sync — arm cross-device confidence (A2 3b-2 remote half) by @BYK in [#1158](https://github.com/BYK/loreai/pull/1158)
+- Native Google Gemini (generateContent) protocol + Gemini CLI support by @BYK in [#1159](https://github.com/BYK/loreai/pull/1159)
+- Support GitHub Copilot CLI (`lore run` / `lore setup`) by @BYK in [#1157](https://github.com/BYK/loreai/pull/1157)
+
+### Bug Fixes 🐛
+
+#### Core
+
+- Cap native ONNX intra-op threads to the cgroup CPU quota by @BYK in [#1170](https://github.com/BYK/loreai/pull/1170)
+- Clamp embedding memory sizing to the cgroup limit (container OOM) by @BYK in [#1168](https://github.com/BYK/loreai/pull/1168)
+
+#### Gateway
+
+- Forward Claude Code side-channel calls upstream untouched by @BYK in [#1161](https://github.com/BYK/loreai/pull/1161)
+- Stop mislabeling idle-resume tail growth as an "earlier message modified" edit by @BYK in [#1156](https://github.com/BYK/loreai/pull/1156)
+- Cache breakpoint at the distilled-prefix boundary (stop mid-conversation busts collapsing to the ~54K head) by @BYK in [#1155](https://github.com/BYK/loreai/pull/1155)
+
+### Internal Changes 🔧
+
+#### Gateway
+
+- Rebuild the npm bundle on demand instead of asserting against a stale one by @BYK in [#1165](https://github.com/BYK/loreai/pull/1165)
+- Drop dead capitalized x-goog-api-key check by @BYK in [#1166](https://github.com/BYK/loreai/pull/1166)
+
 ## 0.35.0
 
 ### New Features ✨
