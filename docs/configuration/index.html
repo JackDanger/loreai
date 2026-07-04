@@ -106,7 +106,7 @@ for (const pre of blocks) {
 <li><a href="#cache"><code dir="auto">cache</code></a> — Anthropic prompt cache TTL and speculative warming.</li>
 <li><a href="#workspaces"><code dir="auto">workspaces</code></a> — Workspace sub-project paths or globs (relative to <code dir="auto">.lore.json</code>). Imported into the root knowledge base on startup. Supports literal paths and single-level globs (e.g. “packages/*”).</li>
 <li><a href="#crossProject"><code dir="auto">crossProject</code></a> — Include cross-project knowledge in compaction summaries and auto-promote knowledge that recurs across 3+ projects. Default: true.</li>
-<li><a href="#agentsFile"><code dir="auto">agentsFile</code></a> — AGENTS.md export/import configuration.</li>
+<li><a href="#agentsFile"><code dir="auto">agentsFile</code></a> — AGENTS.md/CLAUDE.md export/import configuration.</li>
 <li><a href="#loreFile"><code dir="auto">loreFile</code></a> — <code dir="auto">.lore.md</code> export/import configuration.</li>
 <li><a href="#user"><code dir="auto">user</code></a> — User identity for the self-entity. Falls back to git config user.name / user.email if omitted.</li>
 </ul>
@@ -732,7 +732,7 @@ for (const pre of blocks) {
 <div class="sl-heading-wrapper level-h2"><h2 id="crossproject"><code dir="auto">crossProject</code></h2><a class="sl-anchor-link" href="#crossproject"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only" data-pagefind-ignore="">Section titled “crossProject”</span></a></div>
 <p>Include cross-project knowledge in compaction summaries and auto-promote knowledge that recurs across 3+ projects. Default: true.</p>
 <div class="sl-heading-wrapper level-h2"><h2 id="agentsfile"><code dir="auto">agentsFile</code></h2><a class="sl-anchor-link" href="#agentsfile"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only" data-pagefind-ignore="">Section titled “agentsFile”</span></a></div>
-<p>AGENTS.md export/import configuration.</p>
+<p>AGENTS.md/CLAUDE.md export/import configuration.</p>
 
 
 
@@ -759,7 +759,7 @@ for (const pre of blocks) {
 
 
 
-<table><thead><tr><th>Field</th><th>Type</th><th>Default</th><th>Constraints</th><th>Description</th></tr></thead><tbody><tr><td><code dir="auto">enabled</code></td><td>boolean</td><td><code dir="auto">true</code></td><td></td><td>Enable AGENTS.md export/import behaviour. Set to false to disable. Default: true.</td></tr><tr><td><code dir="auto">path</code></td><td>string</td><td><code dir="auto">"AGENTS.md"</code></td><td></td><td>Path to the agents file, relative to the project root. Default: ‘AGENTS.md’.</td></tr></tbody></table>
+<table><thead><tr><th>Field</th><th>Type</th><th>Default</th><th>Constraints</th><th>Description</th></tr></thead><tbody><tr><td><code dir="auto">enabled</code></td><td>boolean</td><td><code dir="auto">true</code></td><td></td><td>Enable AGENTS.md export/import behaviour. Set to false to disable. Default: true.</td></tr><tr><td><code dir="auto">path</code></td><td>string</td><td><code dir="auto">"auto"</code></td><td></td><td>Path to the agents file, relative to the project root, or ‘auto’ (default) to write CLAUDE.md for Claude Code sessions and AGENTS.md otherwise. Set an explicit path (e.g. ‘AGENTS.md’ or ‘CLAUDE.md’) to override.</td></tr></tbody></table>
 <div class="sl-heading-wrapper level-h2"><h2 id="lorefile"><code dir="auto">loreFile</code></h2><a class="sl-anchor-link" href="#lorefile"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only" data-pagefind-ignore="">Section titled “loreFile”</span></a></div>
 <p><code dir="auto">.lore.md</code> export/import configuration.</p>
 
