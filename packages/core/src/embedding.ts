@@ -2860,6 +2860,35 @@ const TEMPORAL_RECHUNK_PAGE = 256;
  */
 const MAX_TEMPORAL_RECHUNK_RETRY_PASSES = 3;
 /**
+ * KV key: the id of the row currently being embedded, set just before the embed
+ * and cleared the instant it settles (success OR any catchable error). If it
+ * survives a process restart, the previous process died *inside* that row's
+ * embed — an uncatchable crash (the native ONNX OOM is an OS SIGKILL, so the
+ * ×0.7 in-worker backoff can't catch it) that the per-row cursor checkpoint
+ * cannot protect against: the cursor only advances AFTER a successful embed, so
+ * the same row is re-fetched and re-crashes on every restart, forever.
+ */
+const TEMPORAL_RECHUNK_INFLIGHT_KEY = "lore:temporal_rechunk.inflight";
+/** KV key: how many times the in-flight row above has taken the process down. */
+const TEMPORAL_RECHUNK_ROW_ATTEMPTS_KEY = "lore:temporal_rechunk.row_attempts";
+/**
+ * KV key: a poison row the walk has decided to permanently step over. DURABLE
+ * (unlike the in-memory `poisonSkipId`) so the skip survives restart even when
+ * the persisted cursor is pinned BEHIND the poison row — which happens when an
+ * earlier row hit a transient failure this pass (its `retryFrom` pins the cursor
+ * to its predecessor). Without a durable record the per-row checkpoint keeps
+ * writing that pinned cursor, so the poison row is re-fetched and re-crashes the
+ * process on every restart until the transient row's retry passes are exhausted.
+ */
+const TEMPORAL_RECHUNK_SKIP_KEY = "lore:temporal_rechunk.skip";
+/**
+ * How many times a single row may crash the whole process before the walk skips
+ * it (advances the cursor past it) instead of retrying forever. The row keeps
+ * its legacy single vector + FTS, exactly like the transient-retry giveup — a
+ * bounded, self-healing liveness guard rather than a permanent wedge.
+ */
+const MAX_TEMPORAL_RECHUNK_ROW_CRASH_ATTEMPTS = 2;
+/**
  * Poll interval while the temporal walk is parked waiting for the host to go
  * idle. Short enough to resume promptly once traffic stops; a parked walk is
  * otherwise idle (one predicate call + one timer per tick).
@@ -2911,6 +2940,9 @@ export function resetTemporalRechunkProgress(): void {
   setKV(TEMPORAL_RECHUNK_DONE_KEY, "0");
   setKV(TEMPORAL_RECHUNK_CURSOR_KEY, "");
   setKV(TEMPORAL_RECHUNK_ATTEMPTS_KEY, "0");
+  setKV(TEMPORAL_RECHUNK_INFLIGHT_KEY, "");
+  setKV(TEMPORAL_RECHUNK_ROW_ATTEMPTS_KEY, "0");
+  setKV(TEMPORAL_RECHUNK_SKIP_KEY, "");
 }
 
 /**
@@ -2987,6 +3019,71 @@ export async function backfillTemporalEmbeddings(
   if (getKV(TEMPORAL_RECHUNK_DONE_KEY) === "1") return 0;
 
   let cursor = getKV(TEMPORAL_RECHUNK_CURSOR_KEY) ?? "";
+
+  // Poison-row liveness guard. If the in-flight marker survived a restart, the
+  // previous process died mid-embed on that row — an uncatchable crash the
+  // per-row cursor checkpoint can't cover (the cursor advances only AFTER a
+  // successful embed, so a row that reliably OOM-SIGKILLs the process is
+  // re-fetched and re-crashes forever). Count the crash; once a row has taken
+  // the process down MAX_TEMPORAL_RECHUNK_ROW_CRASH_ATTEMPTS times, arm a
+  // one-shot skip so the walk steps over it (by id, when it reaches it) and
+  // makes progress. The skipped row keeps its legacy single vector + FTS,
+  // exactly like the transient-retry giveup.
+  //
+  // We skip by matching the row id in the loop rather than jumping the cursor:
+  // the persisted cursor may be pinned earlier than the poison row (at a
+  // transient failure's `retryFrom`), and jumping straight to the poison row
+  // would also skip those earlier, still-pending rows — abandoning their retries
+  // and any not-yet-embedded work between the pin and the poison row.
+  let poisonSkipId = "";
+
+  // Re-arm a previously-recorded durable skip. This is what makes the skip
+  // survive restarts when the cursor is pinned behind the poison row: the KV
+  // outlives the in-memory `poisonSkipId`, so the row is stepped over on every
+  // pass until the cursor durably moves past it (then the marker is retired).
+  const durableSkip = getKV(TEMPORAL_RECHUNK_SKIP_KEY) ?? "";
+  if (durableSkip) {
+    if (durableSkip > cursor) poisonSkipId = durableSkip;
+    else setKV(TEMPORAL_RECHUNK_SKIP_KEY, ""); // cursor passed it → retire
+  }
+
+  const crashedRow = getKV(TEMPORAL_RECHUNK_INFLIGHT_KEY) ?? "";
+  if (crashedRow) {
+    // `crashedRow > cursor`: a genuine mid-embed crash always leaves the marker
+    // AHEAD of the persisted cursor (the cursor only advances after a row
+    // completes). A marker at/behind the cursor names an already-passed row —
+    // it can only arise from a manual cursor edit or a reset race, never a real
+    // crash — so treat it as stale: clear it WITHOUT counting a crash, otherwise
+    // a phantom count would bleed into the next genuine poison row. NOTE: this
+    // ordering compares in JS (string `>`) while the walk pages in SQLite
+    // (`id > ? ORDER BY id`, BINARY collation); the two agree for the ASCII ids
+    // temporal_messages uses (agent-supplied session/message ids).
+    if (crashedRow > cursor) {
+      const rowAttempts =
+        Number(getKV(TEMPORAL_RECHUNK_ROW_ATTEMPTS_KEY) ?? "0") + 1;
+      if (rowAttempts >= MAX_TEMPORAL_RECHUNK_ROW_CRASH_ATTEMPTS) {
+        log.warn(
+          `temporal re-chunk: row ${crashedRow} crashed the process ` +
+            `${rowAttempts}× — skipping it (keeps its legacy vector + FTS)`,
+        );
+        poisonSkipId = crashedRow;
+        // Record the skip durably so a cursor pinned behind it (transient
+        // retryFrom) can't cause the row to be re-embedded — and re-crash — on
+        // the next restart.
+        setKV(TEMPORAL_RECHUNK_SKIP_KEY, crashedRow);
+        setKV(TEMPORAL_RECHUNK_ROW_ATTEMPTS_KEY, "0");
+      } else {
+        // Below the threshold: give the row another chance on this run, but
+        // remember the crash count so a repeat death eventually trips the skip.
+        setKV(TEMPORAL_RECHUNK_ROW_ATTEMPTS_KEY, String(rowAttempts));
+      }
+    } else {
+      // Stale marker at/behind the cursor — not a live poison candidate.
+      setKV(TEMPORAL_RECHUNK_ROW_ATTEMPTS_KEY, "0");
+    }
+    setKV(TEMPORAL_RECHUNK_INFLIGHT_KEY, "");
+  }
+
   let processed = 0;
   let scanned = 0;
   // Resume point of the FIRST row that hit a transient error this pass. We keep
@@ -3060,6 +3157,7 @@ export async function backfillTemporalEmbeddings(
         // Clean pass reached the end — latch done; subsequent startups skip it.
         setKV(TEMPORAL_RECHUNK_DONE_KEY, "1");
         setKV(TEMPORAL_RECHUNK_ATTEMPTS_KEY, "0");
+        setKV(TEMPORAL_RECHUNK_SKIP_KEY, "");
       } else {
         // Some rows failed this pass. Rewind to the first of them so the next
         // startup retries — up to a bounded number of passes, after which we
@@ -3072,6 +3170,7 @@ export async function backfillTemporalEmbeddings(
           );
           setKV(TEMPORAL_RECHUNK_DONE_KEY, "1");
           setKV(TEMPORAL_RECHUNK_ATTEMPTS_KEY, "0");
+          setKV(TEMPORAL_RECHUNK_SKIP_KEY, "");
         } else {
           setKV(TEMPORAL_RECHUNK_ATTEMPTS_KEY, String(attempts));
           setKV(TEMPORAL_RECHUNK_CURSOR_KEY, retryFrom);
@@ -3082,11 +3181,27 @@ export async function backfillTemporalEmbeddings(
 
     let stop = false;
     for (const row of rows) {
+      // Poison row (armed above): step over it WITHOUT embedding — it keeps its
+      // legacy vector + FTS. One-shot: clear the sentinel so only this single
+      // row is skipped and the walk resumes normally. The cursor still advances
+      // here, so the poison row is durably passed.
+      if (poisonSkipId && row.id === poisonSkipId) {
+        poisonSkipId = "";
+        cursor = row.id;
+        scanned++;
+        setKV(TEMPORAL_RECHUNK_CURSOR_KEY, retryFrom ?? cursor);
+        continue;
+      }
       // Idle-gate before starting this row's embed so the walk yields the shared
       // embed pool to live traffic. Parking here is safe: the previous row is
       // already checkpointed, so a park (or a crash while parked) resumes from
       // the last durable cursor.
       await awaitBackfillIdle(opts.shouldPause);
+      // Mark this row in-flight so an uncatchable crash mid-embed (native OOM
+      // SIGKILL) is detectable on the next startup and eventually skipped. It's
+      // cleared the moment the embed settles — success or catchable error — so
+      // only a hard process death ever leaves it set.
+      setKV(TEMPORAL_RECHUNK_INFLIGHT_KEY, row.id);
       try {
         // Count only messages that actually got a chunk set written. A row that
         // reduces to zero embeddable units (store() never persists one, but the
@@ -3097,7 +3212,10 @@ export async function backfillTemporalEmbeddings(
       } catch (err) {
         // Provider went away mid-run — stop WITHOUT advancing past this row or
         // latching done; the next startup resumes from the persisted cursor.
+        // Clear the in-flight marker: the provider being down is not this row's
+        // fault, so it must not count toward the poison-row skip.
         if (err instanceof LocalProviderUnavailableError) {
+          setKV(TEMPORAL_RECHUNK_INFLIGHT_KEY, "");
           log.info("temporal embedding backfill stopped: provider unavailable");
           stop = true;
           break;
@@ -3108,6 +3226,14 @@ export async function backfillTemporalEmbeddings(
         log.error("temporal embedding backfill row failed", row.id, ":", err);
         if (retryFrom === null) retryFrom = cursor;
       }
+      // The row settled without taking the process down: clear the in-flight
+      // marker and reset the crash counter. The counter is a single KV (not
+      // per-row), so this reset bounds it to deaths NOT separated by a clean
+      // row. A pinned cursor (transient retryFrom) plus adjacent crashes can
+      // still let one genuine poison row inherit a count of 1 and be skipped a
+      // crash early — always safe (the row keeps its legacy vector + FTS).
+      setKV(TEMPORAL_RECHUNK_INFLIGHT_KEY, "");
+      setKV(TEMPORAL_RECHUNK_ROW_ATTEMPTS_KEY, "0");
       cursor = row.id;
       scanned++;
 
