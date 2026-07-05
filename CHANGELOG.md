@@ -1,4 +1,23 @@
 # Changelog
+## 0.37.0
+
+### New Features ✨
+
+- (sync) Passphrase UX to activate knowledge encryption (C-4b, #825) by @BYK in [#1174](https://github.com/BYK/loreai/pull/1174)
+
+### Bug Fixes 🐛
+
+#### Core
+
+- Break the temporal re-chunk livelock on a row that crashes the process by @BYK in [#1176](https://github.com/BYK/loreai/pull/1176)
+- Bound embedding-pool memory to one pool-share of free RAM by @BYK in [#1175](https://github.com/BYK/loreai/pull/1175)
+- Collapse per-entry outcomeImpact N+1 on the consolidation path by @BYK in [#1177](https://github.com/BYK/loreai/pull/1177)
+- Self-heal a transient local-embedding init failure instead of latching by @BYK in [#1173](https://github.com/BYK/loreai/pull/1173)
+
+#### Other
+
+- (sync) Scope_keys.wrapped_dek first-write-wins on the server (#825) by @BYK in [#1179](https://github.com/BYK/loreai/pull/1179)
+
 ## 0.36.0
 
 ### New Features ✨
