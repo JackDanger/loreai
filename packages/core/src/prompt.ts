@@ -63,6 +63,7 @@ In coding sessions, the following must be recorded exactly as they appear:
 - Directory contents when enumerated: "src/auth/ contains: jwt.ts, password.ts, middleware.ts, rate-limiter.ts, routes.ts"
 - Test results: "47 tests passing, 3 failing in auth.test.ts"
 - Environment variables: DATABASE_URL, NEXT_PUBLIC_API_URL, CODECOV_TOKEN
+- Exact literal & style values — record the LITERAL token, never a paraphrase: hex colors (#1164a3, #0d2244), CSS declarations (border-radius: 10px, inset 0 8px 0 0, box-shadow: inset 0 8px 0 0, margin-left: 8px), pixel/size dimensions (18px, 8px), version/tag labels (v45), commit SHAs, and CSS/DOM selectors ([class*="ThreadList"], .virtual-list). "Styling", "visual", or "config" details are NOT low-value — they are exactly what the user asks to recall verbatim later.
 
 BAD: 🟡 Added password hashing to the auth module.
 GOOD: 🟡 Added bcrypt password hashing (12 salt rounds) in src/auth/password.ts. Argon2 was considered but rejected — better bcrypt library support for Node 20.
@@ -72,6 +73,9 @@ GOOD: 🟡 CI uses codecov/codecov-action@v4 with CODECOV_TOKEN secret. fail_ci_
 
 BAD: 🟡 Created database schema with several models.
 GOOD: 🟡 Prisma schema defines 4 models: User, Post, Comment, Tag. Migration 20250506_initial_schema creates all tables + Role enum + _PostToTag join table. Cascade delete on User → Post → Comment.
+
+BAD: 🟡 Adjusted the chat panel frame styling and rounded its corners.
+GOOD: 🟡 Chat panel frame (v45): border-top: 8px solid #1164a3; border-left: 8px solid #1164a3; box-shadow: inset 0 8px 0 0; outer container border-radius: 10px, inner .virtual-list border-radius: 8px; rounded top-left + bottom-left corners (18px). Dark-mode variant uses #0d2244.
 
 EXACT NUMBERS — NEVER APPROXIMATE:
 
@@ -248,7 +252,11 @@ This section answers: "Why did we choose approach X?" and "What alternatives wer
 
 ### Technical Changes
 Bugs found, root causes, fixes applied, files modified, tests added/fixed.
-Preserve exact file paths, line numbers, error messages, and commit references.
+Preserve exact file paths, line numbers, error messages, commit references, and
+literal values verbatim — hex colors (#1164a3), CSS/style declarations
+(border-radius: 10px, inset 0 8px 0 0), pixel dimensions (18px), version tags
+(v45), selectors ([class*="ThreadList"]), and exact counts. Never paraphrase a
+style/config value into prose ("rounded corners" loses "border-radius: 10px").
 This section answers: "What bugs were fixed?" and "What files were changed?"
 
 ### Session Timeline
