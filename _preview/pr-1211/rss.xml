@@ -21,6 +21,12 @@ scorer is a mechanical check for those four values, so there is no model grading
 homework. We ran it on a cheaper, everyday model (MiniMax-M3, capable but not a frontier
 model) and on a frontier flagship (Claude Sonnet-5), because that split is exactly where
 the approaches part ways.&lt;/p&gt;
+&lt;p&gt;For the record, so you can reproduce it or pick it apart: we ran this in July 2026 with
+&lt;strong&gt;Lore 0.37.0&lt;/strong&gt; driving &lt;strong&gt;OpenCode 1.17.12&lt;/strong&gt;. The two models were MiniMax-M3
+(&lt;code&gt;minimax/MiniMax-M3&lt;/code&gt;) and Claude Sonnet-5 (&lt;code&gt;claude-sonnet-4-6&lt;/code&gt;). The memory competitors
+were &lt;a href=&quot;https://github.com/mem0ai/mem0&quot;&gt;mem0&lt;/a&gt; (mem0 cloud, via the official
+&lt;code&gt;mem0-mcp-server&lt;/code&gt; at its then-current version) and
+&lt;a href=&quot;https://github.com/Aamirofficiall/mnemonic&quot;&gt;mnemonic&lt;/a&gt; 2.0.2 (the &lt;code&gt;mnemonic-ai&lt;/code&gt; package).&lt;/p&gt;
 &lt;h2 id=&quot;the-first-tax-compaction&quot;&gt;The first tax: compaction&lt;/h2&gt;
 &lt;p&gt;Put the agent in one long session and keep working until the window fills. Every major
 client does the same thing at that point: it compacts, crushing the older turns into a
@@ -56,13 +62,13 @@ hour ago quietly fall out.&lt;/p&gt;
 
 
 
-&lt;table&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;&lt;/th&gt;&lt;th&gt;retention&lt;/th&gt;&lt;th&gt;compactions&lt;/th&gt;&lt;th&gt;total tokens&lt;/th&gt;&lt;th&gt;steps&lt;/th&gt;&lt;th&gt;peak context&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td&gt;no memory&lt;/td&gt;&lt;td&gt;33%&lt;/td&gt;&lt;td&gt;3&lt;/td&gt;&lt;td&gt;5.03M&lt;/td&gt;&lt;td&gt;55&lt;/td&gt;&lt;td&gt;194K&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;strong&gt;Lore&lt;/strong&gt;&lt;/td&gt;&lt;td&gt;&lt;strong&gt;100%&lt;/strong&gt;&lt;/td&gt;&lt;td&gt;&lt;strong&gt;0&lt;/strong&gt;&lt;/td&gt;&lt;td&gt;&lt;strong&gt;4.44M&lt;/strong&gt;&lt;/td&gt;&lt;td&gt;&lt;strong&gt;33&lt;/strong&gt;&lt;/td&gt;&lt;td&gt;&lt;strong&gt;150K&lt;/strong&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;
-&lt;p&gt;Two things are happening at once. The no-memory agent compacts three times and loses two
+&lt;table&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;&lt;/th&gt;&lt;th&gt;retention&lt;/th&gt;&lt;th&gt;compactions&lt;/th&gt;&lt;th&gt;total tokens&lt;/th&gt;&lt;th&gt;steps&lt;/th&gt;&lt;th&gt;peak context&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td&gt;vanilla&lt;/td&gt;&lt;td&gt;33%&lt;/td&gt;&lt;td&gt;3&lt;/td&gt;&lt;td&gt;5.03M&lt;/td&gt;&lt;td&gt;55&lt;/td&gt;&lt;td&gt;194K&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;strong&gt;Lore&lt;/strong&gt;&lt;/td&gt;&lt;td&gt;&lt;strong&gt;100%&lt;/strong&gt;&lt;/td&gt;&lt;td&gt;&lt;strong&gt;0&lt;/strong&gt;&lt;/td&gt;&lt;td&gt;&lt;strong&gt;4.44M&lt;/strong&gt;&lt;/td&gt;&lt;td&gt;&lt;strong&gt;33&lt;/strong&gt;&lt;/td&gt;&lt;td&gt;&lt;strong&gt;150K&lt;/strong&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;
+&lt;p&gt;Two things are happening at once. The vanilla agent compacts three times and loses two
 of the three probes to it. Lore never compacts, because it manages the window on every
 turn instead of waiting for it to overflow, and it keeps all four facts.&lt;/p&gt;
 &lt;p&gt;And it does this for less money, not more. Compaction is not free: it busts the prompt
 cache and rewrites the prefix, and rewritten cache is the expensive kind of token. The
-no-memory run wrote noticeably more to cache and burned 13% more tokens across 67% more
+vanilla run wrote noticeably more to cache and burned 13% more tokens across 67% more
 steps to end up in a worse place. This is the part people miss when they treat compaction as a
 free built-in. You are paying for it every time it fires, and it is charging you to
 forget.&lt;/p&gt;
@@ -70,15 +76,17 @@ forget.&lt;/p&gt;
 context rot (&lt;a href=&quot;https://www.trychroma.com/research/context-rot&quot;&gt;Chroma’s report&lt;/a&gt;, and the
 &lt;a href=&quot;https://github.com/Priyanshu-byte-coder/contextrot&quot;&gt;contextrot&lt;/a&gt; tool that measures it on
 your own sessions) shows models degrade as their window fills. When we ran contextrot over
-these same benchmark sessions, one thing stood out: even at full context the no-memory run
+these same benchmark sessions, one thing stood out: even at full context the vanilla run
 threw no visible trouble, no failed edits, no retries, no re-reads, while our probe shows
 it had already dropped most of the facts. Compaction does not announce itself. The agent
 keeps going, confident, having quietly forgotten.&lt;/p&gt;
 &lt;h2 id=&quot;the-second-tax-remembering-to-remember&quot;&gt;The second tax: remembering to remember&lt;/h2&gt;
 &lt;p&gt;Now the cross-session case, which is what most people mean by memory: something said in
 one session, needed in a later, separate one. This is the job a memory store is built
-for, so we put Lore next to two good ones: mem0 (cloud) and mnemonic (a local SQLite
-store, the closest analogue to how Lore keeps things on your own disk).&lt;/p&gt;
+for, so we put Lore next to two good ones:
+&lt;a href=&quot;https://github.com/mem0ai/mem0&quot;&gt;mem0&lt;/a&gt; (cloud) and
+&lt;a href=&quot;https://github.com/Aamirofficiall/mnemonic&quot;&gt;mnemonic&lt;/a&gt; (a local SQLite store, the
+closest analogue to how Lore keeps things on your own disk).&lt;/p&gt;
 &lt;p&gt;On the frontier model, everyone with memory got it right:&lt;/p&gt;
 
 
@@ -105,11 +113,11 @@ store, the closest analogue to how Lore keeps things on your own disk).&lt;/p&gt
 
 
 
-&lt;table&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;Sonnet-5, cross-session&lt;/th&gt;&lt;th&gt;retention&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td&gt;no memory&lt;/td&gt;&lt;td&gt;0%&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;Lore&lt;/td&gt;&lt;td&gt;100%&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;mnemonic&lt;/td&gt;&lt;td&gt;100%&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;mem0&lt;/td&gt;&lt;td&gt;100%&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;
+&lt;table&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;Sonnet-5, cross-session&lt;/th&gt;&lt;th&gt;retention&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td&gt;vanilla&lt;/td&gt;&lt;td&gt;0%&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;Lore&lt;/td&gt;&lt;td&gt;100%&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;mnemonic&lt;/td&gt;&lt;td&gt;100%&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;mem0&lt;/td&gt;&lt;td&gt;100%&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;
 &lt;p&gt;That is the honest headline: a good store works, and on a capable model it works
 reliably. We are not going to pretend otherwise.&lt;/p&gt;
 &lt;p&gt;Retention is not the whole story, though. Even here Lore reached 100% with the fewest
-tool calls of any arm, roughly 45% fewer than the no-memory run (13 versus 24), and the
+tool calls of any arm, roughly 45% fewer than the vanilla run (13 versus 24), and the
 smallest bill, which we come to next. On a frontier model the win is efficiency: the same answer for less work,
 because managing the window in the loop beats compacting and re-deriving it.&lt;/p&gt;
 &lt;p&gt;The difference shows up on the cheaper, everyday model, the kind you actually run at scale:&lt;/p&gt;
@@ -138,7 +146,7 @@ because managing the window in the loop beats compacting and re-deriving it.&lt;
 
 
 
-&lt;table&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;MiniMax-M3, cross-session&lt;/th&gt;&lt;th&gt;retention&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td&gt;no memory&lt;/td&gt;&lt;td&gt;0%&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;strong&gt;Lore&lt;/strong&gt;&lt;/td&gt;&lt;td&gt;&lt;strong&gt;85%&lt;/strong&gt;&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;mnemonic&lt;/td&gt;&lt;td&gt;33%&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;mem0&lt;/td&gt;&lt;td&gt;17%&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;
+&lt;table&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;MiniMax-M3, cross-session&lt;/th&gt;&lt;th&gt;retention&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td&gt;vanilla&lt;/td&gt;&lt;td&gt;0%&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;strong&gt;Lore&lt;/strong&gt;&lt;/td&gt;&lt;td&gt;&lt;strong&gt;85%&lt;/strong&gt;&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;mnemonic&lt;/td&gt;&lt;td&gt;33%&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;mem0&lt;/td&gt;&lt;td&gt;17%&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;
 &lt;p&gt;The gap is not about storage quality. It is about who has to remember to use it. A store
 the agent drives only works if the agent decides, on its own, to save the offhand value
 when it is mentioned, and then to go looking for it later. An everyday model does not
@@ -188,8 +196,8 @@ with Sonnet:&lt;/p&gt;
 
 
 
-&lt;table&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;&lt;/th&gt;&lt;th&gt;answering cost&lt;/th&gt;&lt;th&gt;memory backend&lt;/th&gt;&lt;th&gt;third-party cost&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td&gt;no memory&lt;/td&gt;&lt;td&gt;$4.03&lt;/td&gt;&lt;td&gt;none&lt;/td&gt;&lt;td&gt;none&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;mnemonic&lt;/td&gt;&lt;td&gt;$3.97&lt;/td&gt;&lt;td&gt;Gemini (embeddings + extraction)&lt;/td&gt;&lt;td&gt;metered, external&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;mem0&lt;/td&gt;&lt;td&gt;$4.10&lt;/td&gt;&lt;td&gt;mem0 cloud&lt;/td&gt;&lt;td&gt;metered, external&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;strong&gt;Lore&lt;/strong&gt;&lt;/td&gt;&lt;td&gt;&lt;strong&gt;$3.34&lt;/strong&gt;&lt;/td&gt;&lt;td&gt;your own model, on your own bill&lt;/td&gt;&lt;td&gt;&lt;strong&gt;none&lt;/strong&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;
-&lt;p&gt;Lore’s answering call is the cheapest of the four, 17% below the no-memory run, for the
+&lt;table&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;&lt;/th&gt;&lt;th&gt;answering cost&lt;/th&gt;&lt;th&gt;memory backend&lt;/th&gt;&lt;th&gt;third-party cost&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td&gt;vanilla&lt;/td&gt;&lt;td&gt;$4.03&lt;/td&gt;&lt;td&gt;none&lt;/td&gt;&lt;td&gt;none&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;mnemonic&lt;/td&gt;&lt;td&gt;$3.97&lt;/td&gt;&lt;td&gt;Gemini (embeddings + extraction)&lt;/td&gt;&lt;td&gt;metered, external&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;mem0&lt;/td&gt;&lt;td&gt;$4.10&lt;/td&gt;&lt;td&gt;mem0 cloud&lt;/td&gt;&lt;td&gt;metered, external&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;strong&gt;Lore&lt;/strong&gt;&lt;/td&gt;&lt;td&gt;&lt;strong&gt;$3.34&lt;/strong&gt;&lt;/td&gt;&lt;td&gt;your own model, on your own bill&lt;/td&gt;&lt;td&gt;&lt;strong&gt;none&lt;/strong&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;
+&lt;p&gt;Lore’s answering call is the cheapest of the four, 17% below the vanilla run, for the
 same reason as before: it does not pay the compaction tax. Its memory work, the background distillation, runs on the same
 model you are already using, so it lands on the same bill and you can predict it from your
 own usage. The alternatives add a separate, metered service on top: Gemini for one, a
@@ -199,7 +207,15 @@ model spend. We did not bill it here because we could not, which is rather the p
 On the cheaper model Lore is far more reliable at a transparent cost. On the frontier model
 it ties on retention with pricing you can actually account for.&lt;/p&gt;
 &lt;h2 id=&quot;what-we-are-not-claiming&quot;&gt;What we are not claiming&lt;/h2&gt;
-&lt;p&gt;The benchmark has limits and we would rather say them than have you find them. We could
+&lt;p&gt;The benchmark has limits and we would rather say them than have you find them.&lt;/p&gt;
+&lt;p&gt;Start with the most obvious one: we built Lore, we designed this benchmark, we ran it,
+and Lore comes out on top. That is a conflict of interest and you should read the numbers
+with it in mind. We tried to be fair — the same tasks, models, and scorer for every arm,
+each competitor on its own documented setup — but we are not neutral, and we almost
+certainly did not tune mem0 or mnemonic as well as their own authors would. If you
+maintain one of these tools and we got your configuration wrong, tell us and we will
+re-run it and update the numbers.&lt;/p&gt;
+&lt;p&gt;We also could
 not measure the competitors’ third-party backend costs, so the totals above are their
 visible cost plus an unknown, not a full accounting. The reliability gap on cheaper models
 is real, but on frontier models it closes, and we showed that. One M3 Lore run out of five
@@ -214,7 +230,9 @@ its background worker needs a real key to run.&lt;/p&gt;
 client compacts, you lose a third of what mattered, and you pay more to get there. A
 store on the sidelines does not change that, however good the store is. Managing the
 window in the loop does, and it is cheaper, and you never have to think about it.&lt;/p&gt;
-&lt;p&gt;Memory is table stakes. The compaction tax is the bill nobody was reading.&lt;/p&gt;</content:encoded><dc:creator>Lore Team</dc:creator><category>memory</category><category>context management</category><category>benchmark</category><category>agents</category></item><item><title>How Lore remembers, forgets, and changes its mind</title><link>https://withlore.ai/blog/how-lore-remembers-and-forgets/</link><guid isPermaLink="true">https://withlore.ai/blog/how-lore-remembers-and-forgets/</guid><description>Most memory tools now ship a set of principles for how an agent should manage its context. Lore&apos;s principles work differently, because the layer enforces them instead of asking the agent to. Here are the rules Lore runs on.</description><pubDate>Thu, 02 Jul 2026 00:00:00 GMT</pubDate><content:encoded>&lt;p&gt;Everywhere you look, agents are being taught to fix themselves. Self-healing loops,
+&lt;p&gt;We have claimed that memory is table stakes and that the real value lies in active
+context management. We could always &lt;em&gt;feel&lt;/em&gt; the difference; being able to put a robust test
+around it not only validates that feeling but also allows us to improve Lore even more.&lt;/p&gt;</content:encoded><dc:creator>Lore Team</dc:creator><category>memory</category><category>context management</category><category>benchmark</category><category>agents</category></item><item><title>How Lore remembers, forgets, and changes its mind</title><link>https://withlore.ai/blog/how-lore-remembers-and-forgets/</link><guid isPermaLink="true">https://withlore.ai/blog/how-lore-remembers-and-forgets/</guid><description>Most memory tools now ship a set of principles for how an agent should manage its context. Lore&apos;s principles work differently, because the layer enforces them instead of asking the agent to. Here are the rules Lore runs on.</description><pubDate>Thu, 02 Jul 2026 00:00:00 GMT</pubDate><content:encoded>&lt;p&gt;Everywhere you look, agents are being taught to fix themselves. Self-healing loops,
 self-improving memory, a model that reads back its own transcript, rewrites its own
 instructions, and prunes whatever it decides has gone stale. There is real energy here, and
 some of it genuinely works.&lt;/p&gt;
