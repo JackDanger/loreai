@@ -18,8 +18,9 @@ replayed. We probe on four arbitrary values stated once in passing, an order sta
 sales channel, a region, a warehouse, none of which can be guessed by reading the code.
 If they show up in the file the agent writes at the end, something carried them. The
 scorer is a mechanical check for those four values, so there is no model grading its own
-homework. We ran it on a weak, cheap model (MiniMax-M3) and a strong flagship
-(Claude Sonnet-5), because that split is exactly where the approaches part ways.&lt;/p&gt;
+homework. We ran it on a cheaper, everyday model (MiniMax-M3, capable but not a frontier
+model) and on a frontier flagship (Claude Sonnet-5), because that split is exactly where
+the approaches part ways.&lt;/p&gt;
 &lt;h2 id=&quot;the-first-tax-compaction&quot;&gt;The first tax: compaction&lt;/h2&gt;
 &lt;p&gt;Put the agent in one long session and keep working until the window fills. Every major
 client does the same thing at that point: it compacts, crushing the older turns into a
@@ -65,6 +66,14 @@ no-memory run wrote noticeably more to cache and burned more total tokens and mo
 to end up in a worse place. This is the part people miss when they treat compaction as a
 free built-in. You are paying for it every time it fires, and it is charging you to
 forget.&lt;/p&gt;
+&lt;p&gt;The loss is also quiet, which is what makes it easy to miss. Independent research on
+context rot (&lt;a href=&quot;https://www.trychroma.com/research/context-rot&quot;&gt;Chroma’s report&lt;/a&gt;, and the
+&lt;a href=&quot;https://github.com/Priyanshu-byte-coder/contextrot&quot;&gt;contextrot&lt;/a&gt; tool that measures it on
+your own sessions) shows models degrade as their window fills. When we ran contextrot over
+these same benchmark sessions, one thing stood out: even at full context the no-memory run
+threw no visible trouble, no failed edits, no retries, no re-reads, while our probe shows
+it had already dropped most of the facts. Compaction does not announce itself. The agent
+keeps going, confident, having quietly forgotten.&lt;/p&gt;
 &lt;h2 id=&quot;the-second-tax-remembering-to-remember&quot;&gt;The second tax: remembering to remember&lt;/h2&gt;
 &lt;p&gt;Now the cross-session case, which is what most people mean by memory: something said in
 one session, needed in a later, separate one. This is the job a memory store is built
@@ -99,7 +108,7 @@ store, the closest analogue to how Lore keeps things on your own disk).&lt;/p&gt
 &lt;table&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;Sonnet-5, cross-session&lt;/th&gt;&lt;th&gt;retention&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td&gt;no memory&lt;/td&gt;&lt;td&gt;0%&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;Lore&lt;/td&gt;&lt;td&gt;100%&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;mnemonic&lt;/td&gt;&lt;td&gt;100%&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;mem0&lt;/td&gt;&lt;td&gt;100%&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;
 &lt;p&gt;That is the honest headline: a good store works, and on a capable model it works
 reliably. We are not going to pretend otherwise.&lt;/p&gt;
-&lt;p&gt;The difference shows up on the cheap model, the kind you actually run at scale:&lt;/p&gt;
+&lt;p&gt;The difference shows up on the cheaper, everyday model, the kind you actually run at scale:&lt;/p&gt;
 
 
 
@@ -128,14 +137,15 @@ reliably. We are not going to pretend otherwise.&lt;/p&gt;
 &lt;table&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;MiniMax-M3, cross-session&lt;/th&gt;&lt;th&gt;retention&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td&gt;no memory&lt;/td&gt;&lt;td&gt;0%&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;strong&gt;Lore&lt;/strong&gt;&lt;/td&gt;&lt;td&gt;&lt;strong&gt;85%&lt;/strong&gt;&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;mnemonic&lt;/td&gt;&lt;td&gt;33%&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;mem0&lt;/td&gt;&lt;td&gt;17%&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;
 &lt;p&gt;The gap is not about storage quality. It is about who has to remember to use it. A store
 the agent drives only works if the agent decides, on its own, to save the offhand value
-when it is mentioned, and then to go looking for it later. A weak model does not reliably
-do either. In the runs where the competitors missed, they had dutifully stored the
+when it is mentioned, and then to go looking for it later. An everyday model does not
+reliably do either. In the runs where the competitors missed, they had dutifully stored the
 project’s coding conventions and skipped the four incidental values entirely, which is
 exactly the kind of fact nobody flags as important and everybody needs later. Lore does
 not ask the model to decide. It captures as the conversation happens and surfaces what is
 relevant on its own, so it does not hang on the model’s discipline on any given turn.&lt;/p&gt;
 &lt;p&gt;That is the attention tax made concrete. Every store the agent reaches for is a store
-that depends on remembering to reach, and the weaker the model, the more that costs you.&lt;/p&gt;
+that depends on remembering to reach, and the further a model sits from the frontier, the
+less reliably it reaches.&lt;/p&gt;
 &lt;h2 id=&quot;what-it-costs-honestly&quot;&gt;What it costs, honestly&lt;/h2&gt;
 &lt;p&gt;Cost is where memory tools get quiet, so here is ours out loud. On the cross-session run
 with Sonnet:&lt;/p&gt;
@@ -182,15 +192,15 @@ own usage. The alternatives add a separate, metered service on top: Gemini for o
 hosted cloud for the other. That is a real cost, and it is one you cannot read off your
 model spend. We did not bill it here because we could not, which is rather the point.&lt;/p&gt;
 &lt;p&gt;We hold ourselves to a simple bar: same price with better results, or cheaper at a tie.
-On the weak model Lore is far more reliable at a transparent cost. On the strong model it
-ties on retention with pricing you can actually account for.&lt;/p&gt;
+On the cheaper model Lore is far more reliable at a transparent cost. On the frontier model
+it ties on retention with pricing you can actually account for.&lt;/p&gt;
 &lt;h2 id=&quot;what-we-are-not-claiming&quot;&gt;What we are not claiming&lt;/h2&gt;
 &lt;p&gt;The benchmark has limits and we would rather say them than have you find them. We could
 not measure the competitors’ third-party backend costs, so the totals above are their
-visible cost plus an unknown, not a full accounting. The weak-model reliability gap is
-real, but on strong models the gap closes, and we showed that. One M3 Lore run out of five
-dropped to a single probe, genuine variance on a weak model that we kept in the average
-rather than trim. And we could not evaluate Lore on an anonymous free endpoint, because
+visible cost plus an unknown, not a full accounting. The reliability gap on cheaper models
+is real, but on frontier models it closes, and we showed that. One M3 Lore run out of five
+dropped to a single probe, genuine run-to-run variance on a cheaper model that we kept in
+the average rather than trim. And we could not evaluate Lore on an anonymous free endpoint, because
 its background worker needs a real key to run.&lt;/p&gt;
 &lt;p&gt;All of it, the tasks, the scorer, the raw per-run numbers, is in the repo. Run
 &lt;code&gt;lore eval&lt;/code&gt; and check our work.&lt;/p&gt;
