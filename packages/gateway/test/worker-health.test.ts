@@ -259,6 +259,76 @@ describe("worker-health", () => {
     });
   });
 
+  // Regression (LOREAI-GATEWAY-3J): credential/config failures (no-auth,
+  // cross-provider) on a self-hosted gateway are the user's local setup, not a
+  // lore bug. They must NOT spawn a "Worker health degraded/critical" Sentry
+  // issue — but the local error log, degraded STATUS, and `lore doctor` warning
+  // are preserved. A window mixing in any genuine outage reason still escalates.
+  describe("credential-class reasons do not escalate to Sentry (#3J)", () => {
+    test("no-auth-only window: degrades locally but sends NO Sentry issue", () => {
+      // 3 rapid no-auth failures reach the degraded threshold in one window.
+      recordWorkerFailure("s1", "lore-contradiction", "no-auth");
+      recordWorkerFailure("s1", "lore-contradiction", "no-auth");
+      recordWorkerFailure("s1", "lore-contradiction", "no-auth");
+
+      // No "Worker health degraded" issue for a purely credential-class run.
+      expect(Sentry.captureMessage).not.toHaveBeenCalled();
+
+      // The local, user-facing signal is preserved: sustained 30+ min →
+      // degraded status + the actionable `lore doctor` warning.
+      _setNowForTest(() => 1_000_000 + 31 * 60 * 1000);
+      expect(getStatus("s1")).toBe("degraded");
+      expect(getDegradationWarning("s1")).not.toBeNull();
+    });
+
+    test("cross-provider-only window: sends NO Sentry issue", () => {
+      recordWorkerFailure("s1", "lore-distill", "cross-provider");
+      recordWorkerFailure("s1", "lore-distill", "cross-provider");
+      recordWorkerFailure("s1", "lore-distill", "cross-provider");
+      expect(Sentry.captureMessage).not.toHaveBeenCalled();
+    });
+
+    test("window mixing a genuine outage reason STILL escalates", () => {
+      recordWorkerFailure("s1", "lore-distill", "no-auth");
+      recordWorkerFailure("s1", "lore-distill", "no-auth");
+      recordWorkerFailure("s1", "lore-distill", "upstream-error"); // genuine
+      expect(Sentry.captureMessage).toHaveBeenCalledTimes(1);
+      const [msg] = (Sentry.captureMessage as ReturnType<typeof vi.fn>).mock
+        .calls[0];
+      expect(msg).toBe("Worker health degraded");
+    });
+
+    test("a genuine reason after a suppressed window still fires the first alert", () => {
+      // Drive 3 credential-class failures so the escalation path actually RUNS
+      // (failureCount reaches DEGRADED_THRESHOLD) and is suppressed — this is
+      // the path that, if buggy, would wrongly stamp `alertSentAt`.
+      recordWorkerFailure("s1", "lore-distill", "no-auth");
+      recordWorkerFailure("s1", "lore-distill", "no-auth");
+      recordWorkerFailure("s1", "lore-distill", "no-auth");
+      expect(Sentry.captureMessage).not.toHaveBeenCalled();
+      // A genuine outage in the same window must still fire the FIRST alert:
+      // `alertSentAt` was left unset by the suppressed run, so the debounce
+      // does not swallow it.
+      recordWorkerFailure("s1", "lore-distill", "upstream-error");
+      expect(Sentry.captureMessage).toHaveBeenCalledTimes(1);
+    });
+
+    test("sustained credential-class failure does NOT fire the critical exception", () => {
+      // Keep failures inside the 5-min window (no rotation) so firstFailureAt
+      // stays put while sustained duration crosses the 60-min critical mark.
+      let t = 1_000_000;
+      for (let i = 0; i <= 16; i++) {
+        _setNowForTest(() => t);
+        recordWorkerFailure("s1", "lore-contradiction", "no-auth");
+        t += 4 * 60 * 1000; // 4 min apart — inside the 5-min window
+      }
+      expect(Sentry.captureException).not.toHaveBeenCalled();
+      // Local critical status is still reflected.
+      _setNowForTest(() => 1_000_000 + 65 * 60 * 1000);
+      expect(getStatus("s1")).toBe("critical");
+    });
+  });
+
   describe("circuit breaker (allowWorkerProbe)", () => {
     test("healthy session is always allowed", () => {
       expect(allowWorkerProbe("s1")).toBe(true);
