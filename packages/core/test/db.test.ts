@@ -4,6 +4,7 @@ import {
   close,
   ensureProject,
   projectId,
+  invalidateProjectIdCache,
   mergeProjectInternal,
   loadForceMinLayer,
   saveForceMinLayer,
@@ -36,6 +37,7 @@ import {
   assertFts5Available,
 } from "../src/db";
 import { enableHostedMode, _resetHostedModeForTest } from "../src/hosted";
+import { deleteProject } from "../src/data";
 
 describe("db", () => {
   test("initializes and creates tables", () => {
@@ -602,6 +604,83 @@ describe("db", () => {
     expect(projectId("/test/alias/worktree")).toBe(id);
   });
 
+  // Regression (LOREAI-GATEWAY-3K): the hot request path resolves the same
+  // worktree/alias path many times per turn. ensureProject/projectId memoize
+  // path→id per connection; the memo must be honored AND invalidated correctly.
+  describe("project id memoization (#3K)", () => {
+    test("serves a resolved alias path from the memo until it is invalidated", () => {
+      const canonical = "/test/memo/canonical";
+      const worktree = "/test/memo/worktree";
+      const id = ensureProject(canonical);
+      db()
+        .query(
+          "INSERT OR IGNORE INTO project_path_aliases (path, project_id) VALUES (?, ?)",
+        )
+        .run(worktree, id);
+
+      // First resolve caches worktree→id via the (stable) alias branch.
+      expect(ensureProject(worktree)).toBe(id);
+
+      // Remove the alias row WITHOUT invalidating the memo. If the memo is live,
+      // a cache HIT still returns the old id even though the DB no longer has
+      // the alias — this is what proves the lookups are actually memoized.
+      db()
+        .query("DELETE FROM project_path_aliases WHERE path = ?")
+        .run(worktree);
+      expect(ensureProject(worktree)).toBe(id); // served from memo
+      expect(projectId(worktree)).toBe(id); // shared memo
+
+      // After explicit invalidation the stale mapping is gone → the now-orphan
+      // worktree path resolves fresh (a brand-new project).
+      invalidateProjectIdCache();
+      expect(ensureProject(worktree)).not.toBe(id);
+    });
+
+    test("deleteProject invalidates the memo so a reused path is never a dangling id", () => {
+      const canonical = "/test/memo-del/canonical";
+      const worktree = "/test/memo-del/worktree";
+      const id1 = ensureProject(canonical);
+      db()
+        .query(
+          "INSERT OR IGNORE INTO project_path_aliases (path, project_id) VALUES (?, ?)",
+        )
+        .run(worktree, id1);
+      expect(ensureProject(worktree)).toBe(id1); // prime the memo
+
+      deleteProject(id1);
+
+      // The memo must have been cleared: the path resolves to a FRESH project,
+      // never the deleted id, and the returned id must actually exist (a stale
+      // memo would hand back id1 and FK-violate on the next temporal write).
+      const id2 = ensureProject(worktree);
+      expect(id2).not.toBe(id1);
+      expect(
+        db().query("SELECT 1 AS n FROM projects WHERE id = ?").get(id2),
+      ).toBeTruthy();
+    });
+
+    test("mergeProjectInternal invalidates the memo (source path resolves to the winner, not the deleted source)", () => {
+      const loserPath = "/test/memo-merge/loser";
+      const winnerPath = "/test/memo-merge/winner";
+      const loser = ensureProject(loserPath);
+      const winner = ensureProject(winnerPath);
+      // Make the loser remote-backed so its settled exact-path row is memoized
+      // (a remote-less row is intentionally never cached).
+      db()
+        .query("UPDATE projects SET git_remote = ? WHERE id = ?")
+        .run("github.com/test/memo-merge", loser);
+      expect(ensureProject(loserPath)).toBe(loser); // primes the memo
+
+      // Merge deletes the loser row and re-points loserPath as an alias→winner.
+      // Without invalidation the memo would keep serving the DELETED loser id —
+      // a dangling FK target for the next temporal/knowledge write.
+      mergeProjectInternal(loser, winner);
+
+      expect(ensureProject(loserPath)).toBe(winner);
+      expect(projectId(loserPath)).toBe(winner);
+    });
+  });
+
   test("ensureProject deduplicates via git_remote", () => {
     // Guard: this test inserts a synthetic /test/... project path via raw SQL,
     // which bypasses ensureProject()'s production-DB guard. If LORE_DB_PATH is
@@ -704,6 +783,22 @@ describe("db", () => {
         .query("SELECT git_remote FROM projects WHERE id = ?")
         .get(id1) as { git_remote: string | null };
       expect(rowAfter.git_remote).toBe("github.com/test/backfill-repo");
+    });
+
+    test("memoizes the mapping after a successful git_remote backfill (#3K)", () => {
+      const path = "/test/backfill-cache/original";
+      const id = ensureProject(path); // remote-less create → left uncached
+      // The backfill settles git_remote and, per the #3K memo, caches path→id.
+      expect(
+        ensureProject(path, undefined, "github.com/test/backfill-cache"),
+      ).toBe(id);
+      // Raw-delete the row WITHOUT invalidating: a cache HIT must still return
+      // id, proving the post-backfill mapping was memoized (so the next call
+      // skips the exact-path lookup — the extra lookup Seer flagged).
+      db().query("DELETE FROM projects WHERE id = ?").run(id);
+      expect(
+        ensureProject(path, undefined, "github.com/test/backfill-cache"),
+      ).toBe(id);
     });
   });
 
