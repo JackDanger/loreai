@@ -79,7 +79,7 @@ keeps going, confident, having quietly forgotten.&lt;/p&gt;
 one session, needed in a later, separate one. This is the job a memory store is built
 for, so we put Lore next to two good ones: mem0 (cloud) and mnemonic (a local SQLite
 store, the closest analogue to how Lore keeps things on your own disk).&lt;/p&gt;
-&lt;p&gt;On the strong model, everyone with memory got it right:&lt;/p&gt;
+&lt;p&gt;On the frontier model, everyone with memory got it right:&lt;/p&gt;
 
 
 
@@ -108,6 +108,10 @@ store, the closest analogue to how Lore keeps things on your own disk).&lt;/p&gt
 &lt;table&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;Sonnet-5, cross-session&lt;/th&gt;&lt;th&gt;retention&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td&gt;no memory&lt;/td&gt;&lt;td&gt;0%&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;Lore&lt;/td&gt;&lt;td&gt;100%&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;mnemonic&lt;/td&gt;&lt;td&gt;100%&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;mem0&lt;/td&gt;&lt;td&gt;100%&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;
 &lt;p&gt;That is the honest headline: a good store works, and on a capable model it works
 reliably. We are not going to pretend otherwise.&lt;/p&gt;
+&lt;p&gt;Retention is not the whole story, though. Even here Lore reached 100% with the fewest
+tool calls of any arm (13, against 20 to 24 for the others) and the smallest bill, which
+we come to next. On a frontier model the win is efficiency: the same answer for less work,
+because managing the window in the loop beats compacting and re-deriving it.&lt;/p&gt;
 &lt;p&gt;The difference shows up on the cheaper, everyday model, the kind you actually run at scale:&lt;/p&gt;
 
 
