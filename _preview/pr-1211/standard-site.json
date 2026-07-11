@@ -49,7 +49,7 @@
         "path": "/blog/the-compaction-tax/",
         "title": "The compaction tax",
         "publishedAt": "2026-07-11T00:00:00.000Z",
-        "description": "Two posts ago we argued that memory is not enough and that you never have to remember to remember. Here are the receipts. A real coding-agent benchmark, and the two taxes it puts a number on.",
+        "description": "A real coding-agent memory benchmark, with receipts. The two taxes memory puts on your dollars and your focus, each with a number attached.",
         "tags": [
           "memory",
           "context management",
