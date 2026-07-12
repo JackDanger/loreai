@@ -231,6 +231,7 @@ async function captureOnePair(
 ): Promise<OraclePair | null> {
   let captured: OraclePair | null = null;
 
+  // oxlint-disable-next-line typescript/no-misused-promises -- createServer ignores the handler's returned promise
   const server = createServer(async (req, res) => {
     if (req.method === "HEAD") {
       res.writeHead(200);
@@ -736,7 +737,7 @@ function applySeed(
   const { pin = true } = opts;
 
   // Normalize the seed to a lowercase `0x...n` BigInt literal so it matches
-  // the existing constants in cch.ts and stays Biome-clean.
+  // the existing constants in cch.ts and stays lint-clean.
   const rawHex = (seedHex.startsWith("0x") ? seedHex.slice(2) : seedHex)
     .replace(/n$/i, "")
     .toLowerCase();
