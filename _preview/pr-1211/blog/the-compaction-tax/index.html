@@ -150,7 +150,7 @@ because managing the window in the loop beats compacting and re-deriving it.</p>
 
 
 
-<table><thead><tr><th>MiniMax-M3, cross-session</th><th>retention</th></tr></thead><tbody><tr><td>vanilla</td><td>0%</td></tr><tr><td><strong>Lore</strong></td><td><strong>85%</strong></td></tr><tr><td>mnemonic</td><td>33%</td></tr><tr><td>mem0</td><td>17%</td></tr></tbody></table>
+<table><thead><tr><th>MiniMax-M3, cross-session</th><th>retention</th></tr></thead><tbody><tr><td>vanilla</td><td>0%</td></tr><tr><td><strong>Lore</strong></td><td><strong>80%</strong></td></tr><tr><td>mnemonic</td><td>33%</td></tr><tr><td>mem0</td><td>17%</td></tr></tbody></table>
 <p>The gap is not about storage quality. It is about who has to remember to use it. A store
 the agent drives only works if the agent decides, on its own, to save the offhand value
 when it is mentioned, and then to go looking for it later. An everyday model does not
@@ -214,18 +214,20 @@ it ties on retention with pricing you can actually account for.</p>
 <p>The benchmark has limits and we would rather say them than have you find them.</p>
 <p>Start with the most obvious one: we built Lore, we designed this benchmark, we ran it,
 and Lore comes out on top. That is a conflict of interest and you should read the numbers
-with it in mind. We tried to be fair — the same tasks, models, and scorer for every arm,
-each competitor on its own documented setup — but we are not neutral, and we almost
+with it in mind. We tried to be fair (the same tasks, models, and scorer for every arm,
+each competitor on its own documented setup), but we are not neutral, and we almost
 certainly did not tune mem0 or mnemonic as well as their own authors would. If you
 maintain one of these tools and we got your configuration wrong, tell us and we will
 re-run it and update the numbers.</p>
 <p>We also could
 not measure the competitors’ third-party backend costs, so the totals above are their
 visible cost plus an unknown, not a full accounting. The reliability gap on cheaper models
-is real, but on frontier models it closes, and we showed that. One M3 Lore run out of five
-dropped to a single probe, genuine run-to-run variance on a cheaper model that we kept in
-the average rather than trim. And we could not evaluate Lore on an anonymous free endpoint, because
-its background worker needs a real key to run.</p>
+is real, but on frontier models it closes, and we showed that. And the cheaper-model number
+is not a clean 100%: one M3 Lore run out of five dropped to zero, where the model invented
+its own defaults even with the right values sitting in front of it, the same way a model
+can ignore any instruction you give it. That is a ceiling no memory layer lifts, and we
+kept the run in the average rather than trim it. And we could not evaluate Lore on an
+anonymous free endpoint, because its background worker needs a real key to run.</p>
 <p>All of it, the tasks, the scorer, the raw per-run numbers, is in the repo. Run
 <code>lore eval</code> and check our work.</p>
 <h2 id="back-to-the-one-question">Back to the one question</h2>
@@ -234,6 +236,14 @@ its background worker needs a real key to run.</p>
 client compacts, you lose a third of what mattered, and you pay more to get there. A
 store on the sidelines does not change that, however good the store is. Managing the
 window in the loop does, and it is cheaper, and you never have to think about it.</p>
+<p>That last part is not hypothetical. Building this benchmark already changed the product.
+An earlier cut of it showed cheaper models dropping the incidental facts even when Lore had
+captured them perfectly. The facts were in memory, just not reliably in front of the model
+when it mattered. So we changed Lore to fold a session’s own distilled memory into the
+working context automatically, the moment it is written, instead of waiting for anything to
+be promoted first. On the cheaper model that moved the incidental facts from under half to
+four out of five; the 80% above is Lore with that change on by default. The benchmark did
+not just score the product. It told us where to push it.</p>
 <p>We have claimed that memory is table stakes and that the real value lies in active
 context management. We could always <em>feel</em> the difference; being able to put a robust test
 around it not only validates that feeling but also allows us to improve Lore even more.</p> </div> </article>  </main> <footer> <div class="foot-bottom"> <small>&copy; 2026 Lore.AI</small> </div> </footer> </body></html>

@@ -146,7 +146,7 @@ because managing the window in the loop beats compacting and re-deriving it.&lt;
 
 
 
-&lt;table&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;MiniMax-M3, cross-session&lt;/th&gt;&lt;th&gt;retention&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td&gt;vanilla&lt;/td&gt;&lt;td&gt;0%&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;strong&gt;Lore&lt;/strong&gt;&lt;/td&gt;&lt;td&gt;&lt;strong&gt;85%&lt;/strong&gt;&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;mnemonic&lt;/td&gt;&lt;td&gt;33%&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;mem0&lt;/td&gt;&lt;td&gt;17%&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;
+&lt;table&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;MiniMax-M3, cross-session&lt;/th&gt;&lt;th&gt;retention&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td&gt;vanilla&lt;/td&gt;&lt;td&gt;0%&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;strong&gt;Lore&lt;/strong&gt;&lt;/td&gt;&lt;td&gt;&lt;strong&gt;80%&lt;/strong&gt;&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;mnemonic&lt;/td&gt;&lt;td&gt;33%&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;mem0&lt;/td&gt;&lt;td&gt;17%&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;
 &lt;p&gt;The gap is not about storage quality. It is about who has to remember to use it. A store
 the agent drives only works if the agent decides, on its own, to save the offhand value
 when it is mentioned, and then to go looking for it later. An everyday model does not
@@ -210,18 +210,20 @@ it ties on retention with pricing you can actually account for.&lt;/p&gt;
 &lt;p&gt;The benchmark has limits and we would rather say them than have you find them.&lt;/p&gt;
 &lt;p&gt;Start with the most obvious one: we built Lore, we designed this benchmark, we ran it,
 and Lore comes out on top. That is a conflict of interest and you should read the numbers
-with it in mind. We tried to be fair — the same tasks, models, and scorer for every arm,
-each competitor on its own documented setup — but we are not neutral, and we almost
+with it in mind. We tried to be fair (the same tasks, models, and scorer for every arm,
+each competitor on its own documented setup), but we are not neutral, and we almost
 certainly did not tune mem0 or mnemonic as well as their own authors would. If you
 maintain one of these tools and we got your configuration wrong, tell us and we will
 re-run it and update the numbers.&lt;/p&gt;
 &lt;p&gt;We also could
 not measure the competitors’ third-party backend costs, so the totals above are their
 visible cost plus an unknown, not a full accounting. The reliability gap on cheaper models
-is real, but on frontier models it closes, and we showed that. One M3 Lore run out of five
-dropped to a single probe, genuine run-to-run variance on a cheaper model that we kept in
-the average rather than trim. And we could not evaluate Lore on an anonymous free endpoint, because
-its background worker needs a real key to run.&lt;/p&gt;
+is real, but on frontier models it closes, and we showed that. And the cheaper-model number
+is not a clean 100%: one M3 Lore run out of five dropped to zero, where the model invented
+its own defaults even with the right values sitting in front of it, the same way a model
+can ignore any instruction you give it. That is a ceiling no memory layer lifts, and we
+kept the run in the average rather than trim it. And we could not evaluate Lore on an
+anonymous free endpoint, because its background worker needs a real key to run.&lt;/p&gt;
 &lt;p&gt;All of it, the tasks, the scorer, the raw per-run numbers, is in the repo. Run
 &lt;code&gt;lore eval&lt;/code&gt; and check our work.&lt;/p&gt;
 &lt;h2 id=&quot;back-to-the-one-question&quot;&gt;Back to the one question&lt;/h2&gt;
@@ -230,6 +232,14 @@ its background worker needs a real key to run.&lt;/p&gt;
 client compacts, you lose a third of what mattered, and you pay more to get there. A
 store on the sidelines does not change that, however good the store is. Managing the
 window in the loop does, and it is cheaper, and you never have to think about it.&lt;/p&gt;
+&lt;p&gt;That last part is not hypothetical. Building this benchmark already changed the product.
+An earlier cut of it showed cheaper models dropping the incidental facts even when Lore had
+captured them perfectly. The facts were in memory, just not reliably in front of the model
+when it mattered. So we changed Lore to fold a session’s own distilled memory into the
+working context automatically, the moment it is written, instead of waiting for anything to
+be promoted first. On the cheaper model that moved the incidental facts from under half to
+four out of five; the 80% above is Lore with that change on by default. The benchmark did
+not just score the product. It told us where to push it.&lt;/p&gt;
 &lt;p&gt;We have claimed that memory is table stakes and that the real value lies in active
 context management. We could always &lt;em&gt;feel&lt;/em&gt; the difference; being able to put a robust test
 around it not only validates that feeling but also allows us to improve Lore even more.&lt;/p&gt;</content:encoded><dc:creator>Lore Team</dc:creator><category>memory</category><category>context management</category><category>benchmark</category><category>agents</category></item><item><title>How Lore remembers, forgets, and changes its mind</title><link>https://withlore.ai/blog/how-lore-remembers-and-forgets/</link><guid isPermaLink="true">https://withlore.ai/blog/how-lore-remembers-and-forgets/</guid><description>Most memory tools now ship a set of principles for how an agent should manage its context. Lore&apos;s principles work differently, because the layer enforces them instead of asking the agent to. Here are the rules Lore runs on.</description><pubDate>Thu, 02 Jul 2026 00:00:00 GMT</pubDate><content:encoded>&lt;p&gt;Everywhere you look, agents are being taught to fix themselves. Self-healing loops,
