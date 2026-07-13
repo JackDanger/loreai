@@ -10,25 +10,28 @@ portrait of how your team actually thinks, and the portrait moves in only one di
 provider gets a little more of it every session. You get an answer to today’s question and
 nothing about what they kept.&lt;/p&gt;
 &lt;h2 id=&quot;look-closely-at-the-fix&quot;&gt;Look closely at the fix&lt;/h2&gt;
-&lt;p&gt;Here’s where we part ways with him, and it’s worth being specific about how.&lt;/p&gt;
+&lt;p&gt;Here’s where we part ways with him, and it’s worth being specific about how. Much of what he
+prescribes we have no quarrel with, and some of it we already build. This is about one piece.&lt;/p&gt;
 &lt;p&gt;Nadella’s answer is that enterprises should win “the rights to use model outputs to fine tune
 and/or train their own models.” Read that twice. The remedy he’s reaching for is the right to
 train on the exhaust. In the industry that has a name, distillation: using a strong model’s
-outputs to teach another model. Anthropic and the other frontier labs prohibit exactly this,
-which is what he means by “restrictive terms on distillation.”&lt;/p&gt;
+outputs to teach a competing model. Anthropic and the other frontier labs restrict exactly
+this, which is what he means by “restrictive terms on distillation.”&lt;/p&gt;
 &lt;p&gt;It’s worth asking who that fix helps most. Training or fine-tuning a model on your own traces
 is expensive, and it pays off only at a scale and with a purpose most companies don’t have. It
 reads less like a fix for everyone and more like one sized for large players who want to build
-or tune models of their own. Microsoft, for its part, has no frontier model of its own, its
-bet on a single provider has grown complicated, and it’s now building in-house. We can’t see
-anyone’s intent and won’t pretend to. But when a fix this specific arrives bundled with the
-diagnosis, it’s fair to notice that the principle and the interest happen to point the same way.&lt;/p&gt;
-&lt;p&gt;It also over-solves the problem. Nadella writes that the answer “requires more than data
-protection.” For the leak he described, it doesn’t. The thing he diagnosed, paying twice and
-watching your learning flow one way, is a data-protection problem. Keep your traces, decisions,
-and memory on your side of the boundary and you’ve stopped the leak. You do not need the right
-to train a model to stop paying twice. Training rights are a separate, much larger ask, folded
-into the same sentence as if they were the same need.&lt;/p&gt;
+or tune models of their own. Microsoft, for its part, has no frontier-class model of its own
+yet, its bet on a single provider has grown complicated, and it’s now building in-house. We
+can’t see anyone’s intent and won’t pretend to. But when a fix this specific arrives bundled
+with the diagnosis, it’s fair to notice that the principle and the interest happen to point the
+same way.&lt;/p&gt;
+&lt;p&gt;It also reaches further than the problem needs. Nadella writes that the answer “requires more
+than data protection,” and leans on that to justify training rights. But look at the leak he
+actually describes: the provider walks away with a compounding record of how you work, and you
+walk away with nothing durable. That gap closes the moment you start keeping and compounding
+the learning on your own side. You do not need the right to train a model to do that. Training
+rights are a separate, much larger ask, folded into the same sentence as if they were the same
+need.&lt;/p&gt;
 &lt;h2 id=&quot;learning-doesnt-have-to-live-in-weights&quot;&gt;Learning doesn’t have to live in weights&lt;/h2&gt;
 &lt;p&gt;The move that dissolves most of the debate is noticing that “learning from your interactions”
 and “training a model on your interactions” are two different things.&lt;/p&gt;
@@ -46,13 +49,14 @@ going anywhere near a model’s weights.&lt;/p&gt;
 sessions into a dense record of what was established. The knowledge layer pulls out the
 decisions, conventions, and gotchas as they happen, including the ones you only ever expressed
 by correcting the model. You never have to remember to save anything, and none of it lives in
-someone else’s tenant. No account, no server, nothing leaving your machine unless you choose to
-share it with your team.&lt;/p&gt;
+someone else’s tenant. No account, no server, and none of this learning leaves your machine
+unless you choose to share it with your team.&lt;/p&gt;
 &lt;p&gt;Be honest about the wire: your prompts still go to whatever model you’re using, because that’s
-how you get an answer. What stays home is the learning. The distilled history, the extracted
-knowledge, the patterns, the record of every correction. The exhaust Nadella says leaks away is
-the exact thing Lore captures and keeps on your side of the boundary, in token space, where no
-distillation rule reaches.&lt;/p&gt;
+how you get an answer. Lore doesn’t pretend otherwise. What it changes is the other side of the
+ledger. The distilled history, the extracted knowledge, the patterns, the record of every
+correction, all of it gets captured and compounded on your side too, in token space, where no
+distillation rule reaches. The provider still sees each turn. It just stops being the only one
+that walks away with a durable record.&lt;/p&gt;
 &lt;p&gt;That seat, seeing every token of every session, only makes sense if it’s yours. It’s why Lore
 is &lt;a href=&quot;https://fair.io&quot;&gt;Fair Source&lt;/a&gt; (FSL-1.1-Apache-2.0): the code that touches your tokens is
 right there to read, and it turns into Apache 2.0 on a timer.&lt;/p&gt;
@@ -71,8 +75,9 @@ it’s going to play out over years between companies with far more at stake tha
 welcome to watch it.&lt;/p&gt;
 &lt;p&gt;You don’t have to wait for it. The learning loop Nadella says every organization needs already
 exists in a form that asks no one’s permission: token-space, local, model-agnostic, running
-today. In consuming intelligence, you’re creating intelligence. That’s his line, and he’s right
-about it. The only question is who keeps it, and you can answer that one yourself this afternoon.&lt;/p&gt;</content:encoded><dc:creator>Lore Team</dc:creator><category>memory</category><category>context management</category><category>agents</category></item><item><title>How Lore remembers, forgets, and changes its mind</title><link>https://withlore.ai/blog/how-lore-remembers-and-forgets/</link><guid isPermaLink="true">https://withlore.ai/blog/how-lore-remembers-and-forgets/</guid><description>Most memory tools now ship a set of principles for how an agent should manage its context. Lore&apos;s principles work differently, because the layer enforces them instead of asking the agent to. Here are the rules Lore runs on.</description><pubDate>Thu, 02 Jul 2026 00:00:00 GMT</pubDate><content:encoded>&lt;p&gt;Everywhere you look, agents are being taught to fix themselves. Self-healing loops,
+today. In consuming intelligence, you are creating intelligence. That’s his line, and he’s
+right about it. The only question is who keeps it, and you can answer that one yourself this
+afternoon.&lt;/p&gt;</content:encoded><dc:creator>Lore Team</dc:creator><category>memory</category><category>context management</category><category>agents</category></item><item><title>How Lore remembers, forgets, and changes its mind</title><link>https://withlore.ai/blog/how-lore-remembers-and-forgets/</link><guid isPermaLink="true">https://withlore.ai/blog/how-lore-remembers-and-forgets/</guid><description>Most memory tools now ship a set of principles for how an agent should manage its context. Lore&apos;s principles work differently, because the layer enforces them instead of asking the agent to. Here are the rules Lore runs on.</description><pubDate>Thu, 02 Jul 2026 00:00:00 GMT</pubDate><content:encoded>&lt;p&gt;Everywhere you look, agents are being taught to fix themselves. Self-healing loops,
 self-improving memory, a model that reads back its own transcript, rewrites its own
 instructions, and prunes whatever it decides has gone stale. There is real energy here, and
 some of it genuinely works.&lt;/p&gt;
