@@ -171,17 +171,30 @@ export async function accumulateResponsesSSEStream(
 
           const respUsage = resp.usage as Record<string, unknown> | undefined;
           if (respUsage) {
-            if (typeof respUsage.input_tokens === "number") {
-              usage.inputTokens = respUsage.input_tokens;
-            }
             if (typeof respUsage.output_tokens === "number") {
               usage.outputTokens = respUsage.output_tokens;
             }
-            const promptDetails = respUsage.prompt_tokens_details as
+            // Responses API reports cache details under `input_tokens_details`;
+            // fall back to `prompt_tokens_details` for OpenAI-compatible providers.
+            const promptDetails = (respUsage.input_tokens_details ??
+              respUsage.prompt_tokens_details) as
               | Record<string, number>
               | undefined;
             if (promptDetails?.cached_tokens !== undefined) {
               usage.cacheReadInputTokens = promptDetails.cached_tokens;
+            }
+            if (promptDetails?.cache_write_tokens !== undefined) {
+              usage.cacheCreationInputTokens = promptDetails.cache_write_tokens;
+            }
+            if (typeof respUsage.input_tokens === "number") {
+              // input_tokens is inclusive of cache reads/writes; subtract them
+              // to match the gateway's disjoint token convention.
+              usage.inputTokens = Math.max(
+                0,
+                respUsage.input_tokens -
+                  (promptDetails?.cached_tokens ?? 0) -
+                  (promptDetails?.cache_write_tokens ?? 0),
+              );
             }
           }
         }

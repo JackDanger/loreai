@@ -376,6 +376,7 @@ export async function accumulateOpenAISSEStream(
   let inputTokens = 0;
   let outputTokens = 0;
   let cachedTokens: number | undefined;
+  let cacheWriteTokens: number | undefined;
 
   if (!upstreamResponse.body) {
     throw new Error("Upstream response has no body");
@@ -445,6 +446,8 @@ export async function accumulateOpenAISSEStream(
         | undefined;
       if (details?.cached_tokens !== undefined)
         cachedTokens = details.cached_tokens;
+      if (details?.cache_write_tokens !== undefined)
+        cacheWriteTokens = details.cache_write_tokens;
     }
   }
 
@@ -472,9 +475,17 @@ export async function accumulateOpenAISSEStream(
     content,
     stopReason,
     usage: {
-      inputTokens,
+      // prompt_tokens is inclusive of cache reads/writes; subtract them to
+      // match the gateway's disjoint token convention (see
+      // disjointOpenAIInputTokens in llm-adapter.ts). Inlined here to keep this
+      // leaf stream module free of a cross-module import.
+      inputTokens: Math.max(
+        0,
+        inputTokens - (cachedTokens ?? 0) - (cacheWriteTokens ?? 0),
+      ),
       outputTokens,
       cacheReadInputTokens: cachedTokens,
+      cacheCreationInputTokens: cacheWriteTokens,
     },
   };
 }
