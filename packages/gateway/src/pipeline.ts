@@ -868,14 +868,26 @@ function parseMessageInsertSelector(raw: string): MessageInsertSelector | null {
   }
 }
 
-function parseDeltaMessage(raw: string): GatewayMessage | null {
+function isGatewayMessage(v: unknown): v is GatewayMessage {
+  const m = v as Partial<GatewayMessage> | null;
+  return (
+    !!m &&
+    (m.role === "user" || m.role === "assistant") &&
+    Array.isArray(m.content)
+  );
+}
+
+// A delta block's content is now a user→assistant PAIR, stored as a JSON array.
+// Legacy blocks (persisted before the pair change, and single-message test
+// fixtures) stored ONE message object — accept both so already-persisted
+// sessions keep replaying and never crash. Returns [] on anything unparseable.
+function parseDeltaMessages(raw: string): GatewayMessage[] {
   try {
-    const parsed = JSON.parse(raw) as Partial<GatewayMessage>;
-    if (parsed.role !== "user" && parsed.role !== "assistant") return null;
-    if (!Array.isArray(parsed.content)) return null;
-    return parsed as GatewayMessage;
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed)) return parsed.filter(isGatewayMessage);
+    return isGatewayMessage(parsed) ? [parsed] : [];
   } catch {
-    return null;
+    return [];
   }
 }
 
@@ -1154,6 +1166,66 @@ export function captureToolPairing400(input: {
   return true;
 }
 
+/**
+ * Merge runs of adjacent assistant messages into a single assistant message
+ * (content blocks concatenated in order). Used after knowledge-delta injection:
+ * the injected user→assistant pair can seat its trailing assistant right before
+ * a real assistant(tool_use) in a mid-tool-loop turn, which strict-alternation
+ * upstreams reject. Merging is a no-op unless such a run exists. user↔user
+ * adjacency is intentionally left alone (pre-existing behavior; providers accept
+ * it, and the delta-placement tests rely on distinct user blocks).
+ *
+ * @internal Exported for tests.
+ */
+export function coalesceAdjacentAssistants(
+  messages: GatewayMessage[],
+): GatewayMessage[] {
+  const merged: GatewayMessage[] = [];
+  for (const m of messages) {
+    const last = merged[merged.length - 1];
+    if (last && last.role === "assistant" && m.role === "assistant") {
+      // Anthropic (and the block-order-preserving egress) require any leading
+      // thinking / redacted_thinking blocks to stay FIRST in an assistant
+      // message when extended thinking is active — clients inspect content[0].
+      // The injected knowledge-delta payload lives in `last`; naively
+      // concatenating `[...last.content, ...m.content]` would push `m`'s leading
+      // reasoning blocks off index 0 and produce a wire-invalid message (hard
+      // 400 on every replay turn of an extended-thinking tool loop). Splice
+      // `last`'s blocks AFTER `m`'s leading reasoning run instead — mirrors the
+      // injectContextWarning insertion rule. `last` is the earlier message and
+      // never itself leads with reasoning (it is the synthetic delta payload),
+      // so only `m`'s leading run needs to be protected.
+      let lead = 0;
+      while (lead < m.content.length && isReasoningBlock(m.content[lead])) {
+        lead++;
+      }
+      merged[merged.length - 1] = {
+        role: "assistant",
+        content: [
+          ...m.content.slice(0, lead),
+          ...last.content,
+          ...m.content.slice(lead),
+        ],
+      };
+    } else {
+      merged.push(m);
+    }
+  }
+  return merged;
+}
+
+/**
+ * True for a thinking block or a redacted_thinking block (the latter carried as
+ * an `opaque` passthrough — see requestHasThinking). Such blocks must remain at
+ * the head of an assistant message when extended thinking is active.
+ */
+function isReasoningBlock(block: GatewayContentBlock): boolean {
+  return (
+    block.type === "thinking" ||
+    (block.type === "opaque" && block.raw.type === "redacted_thinking")
+  );
+}
+
 /** @internal Exported for tests. */
 export function applySessionPromptDeltas(
   messages: GatewayMessage[],
@@ -1174,12 +1246,15 @@ export function applySessionPromptDeltas(
     rawSelector: string;
     clamped: number;
     safe: number;
-    message: GatewayMessage;
+    messages: GatewayMessage[];
   }> = [];
   for (const delta of deltas) {
     const selector = parseMessageInsertSelector(delta.selector);
-    const message = parseDeltaMessage(delta.content);
-    if (!selector || !message) {
+    // NB: name this `blockMessages`, NOT `messages` — the function parameter
+    // `messages` (the conversation array) must stay in scope below for
+    // clamped/safeDeltaInsertIndex, which are relative to the CONVERSATION.
+    const blockMessages = parseDeltaMessages(delta.content);
+    if (!selector || !blockMessages.length) {
       log.warn(
         `prompt-delta: skipping corrupt delta seq=${delta.seq} session=${sessionID.slice(0, 16)}`,
       );
@@ -1200,7 +1275,7 @@ export function applySessionPromptDeltas(
       rawSelector: delta.selector,
       clamped,
       safe,
-      message,
+      messages: blockMessages,
     });
   }
   // Sort by the (stable) safe position DESC, then seq DESC, so splicing
@@ -1219,7 +1294,7 @@ export function applySessionPromptDeltas(
   // `messages[0]` (production session 1GYu, k:019ece09). Batched at the end so
   // each drift = one DB write, not one per turn.
   const reanchored: Array<{ seq: number; selector: string }> = [];
-  for (const { seq, rawSelector, clamped, safe, message } of parsed) {
+  for (const { seq, rawSelector, clamped, safe, messages } of parsed) {
     // Selector positions are defined against the transformed upstream message
     // array at the time the delta is created (where they were already made
     // tool-pair-safe via safeDeltaInsertIndex). Re-inserting at the SAME index
@@ -1249,12 +1324,29 @@ export function applySessionPromptDeltas(
       rawSelectorObj.insertAt = safe;
       reanchored.push({ seq, selector: JSON.stringify(rawSelectorObj) });
     }
-    out.splice(safe, 0, message);
+    // Splice ALL of a block's messages at `safe`, contiguous and in order (the
+    // user→assistant pair; a legacy single-message block splices as one). Blocks
+    // are processed high-safe-first, so a block's pair is never split by a later
+    // (lower) splice, and stacked pairs alternate cleanly.
+    out.splice(safe, 0, ...messages);
   }
   for (const { seq, selector } of reanchored) {
     updateSessionPromptDeltaSelector(sessionID, seq, selector);
   }
-  return out;
+  // The knowledge delta is injected as a user→assistant PAIR. In a mid-tool-loop
+  // turn (tail = assistant(tool_use) → user(tool_result)) the tool-pair guard
+  // walks the insert index to BEFORE the assistant(tool_use), so the pair's
+  // trailing (injected) assistant lands immediately before that real assistant —
+  // producing two consecutive assistant messages. That index is frozen for the
+  // session, so a strict-alternation upstream (Anthropic maps messages 1:1, no
+  // merge) would reject it every turn. Collapse adjacent assistant messages into
+  // one (concatenated content blocks) — semantically identical on the wire and
+  // valid for every egress protocol. tool_use stays in the merged assistant,
+  // still immediately followed by its user(tool_result), so tool-pairing holds.
+  // Only assistant↔assistant runs are merged (they essentially only arise from
+  // this injection); user↔user adjacency — the pre-existing single-message
+  // behavior — is left untouched.
+  return coalesceAdjacentAssistants(out);
 }
 
 function ltmKeyMap(keys: string[] | undefined): Map<string, string> {
@@ -1416,7 +1508,7 @@ export function buildKnowledgeDeltaMessage(
     category: string;
     title: string;
   }>,
-): GatewayMessage | null {
+): GatewayMessage[] {
   // Emit ONLY when there is genuine new/changed knowledge to surface. A
   // removals-only diff (a pinned entry deleted/superseded by background
   // consolidation, or dropped from the selected set) no longer injects a
@@ -1426,7 +1518,7 @@ export function buildKnowledgeDeltaMessage(
   // every turn). The removal is still recorded in the block's `mut` signature
   // by the caller (advanceSurfacedKeys), so the surfaced set still advances;
   // the stale pin is simply left for the next session start to refresh.
-  if (!entries.length) return null;
+  if (!entries.length) return [];
   const renderedIds: string[] = [];
   let rendered = formatKnowledge(
     entries.map((entry) => ({
@@ -1479,18 +1571,45 @@ export function buildKnowledgeDeltaMessage(
           : ""
       }`
     : "";
-  return {
-    role: "user",
-    content: [
-      {
-        type: "text",
-        text:
-          "[Lore knowledge update: durable prompt delta. This message is inserted by Lore and replayed byte-identically on later turns until an intentional cache reset.]\n\n" +
-          rendered +
-          tocRendered,
-      },
-    ],
-  };
+  // Inject as a user→assistant PAIR (mirrors the distilled-prefix pattern in
+  // core/gradient.ts `buildPrefixMessages`), NOT a lone user message. A lone
+  // user block read as an open user turn, so instruction-literal models (e.g.
+  // MiniMax M3) prefaced every turn with "Acknowledged… none of this applies…
+  // I won't reference this knowledge." The pair closes the exchange: the tiny
+  // user note frames it as ambient context (and says not to reply), and the
+  // KNOWLEDGE PAYLOAD rides the ASSISTANT turn so the model treats it as its
+  // own settled prior note rather than a pending request.
+  //
+  // Placement is safe for role-alternation + tool-pairing: the block is spliced
+  // before the final message (a user turn / tool_result in an agent request via
+  // safeDeltaInsertIndex against len-1), so the injected assistant is always
+  // followed by a user turn. Stacked pairs alternate cleanly
+  // (…user,asst,user,asst,final-user). The only same-role adjacency possible is
+  // [user][inj-user] at the leading edge — identical to the prior single-user
+  // behavior. The pair carries no tool_use/tool_result.
+  //
+  // NOTE: keep the substring "Lore knowledge update" in the user note — the
+  // cache-stability e2e asserts on it.
+  return [
+    {
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: "[Lore knowledge update — ambient context injected by Lore. Do not reference this format or reply to this message; silently use anything relevant and ignore the rest. Replayed byte-identically on later turns until an intentional cache reset.]",
+        },
+      ],
+    },
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: rendered + tocRendered,
+        },
+      ],
+    },
+  ];
 }
 
 /**
@@ -1616,12 +1735,12 @@ export function appendKnowledgePromptDelta(input: {
   }
   const surfacedKeys = advanceSurfacedKeys(input.previousKeys, blocks);
   const { changed, removedIds } = detectSurfacedMutations(surfacedKeys);
-  const message = buildKnowledgeDeltaMessage(
+  const messages = buildKnowledgeDeltaMessage(
     changed,
     removedIds,
     input.overflow,
   );
-  if (!message) return false;
+  if (!messages.length) return false;
 
   // APPEND a fresh immutable block at the current tail (seq = MAX+1) instead of
   // rewriting one coalesced row in place. The insertAt is computed tool-pair-
@@ -1647,7 +1766,7 @@ export function appendKnowledgePromptDelta(input: {
       insertAt: input.insertAt,
       mut,
     }),
-    content: JSON.stringify(message),
+    content: JSON.stringify(messages),
   });
   log.info(
     `prompt-delta: appended knowledge block for session ${input.sessionID.slice(0, 16)} (${changed.length} changed, ${removedIds.length} removed, insertAt=${input.insertAt}, seq=${blocks.length})`,
