@@ -2402,38 +2402,56 @@ export async function forSession(
       // fall back to FTS5 so they aren't invisible to scoring.
       const ftsScores = await scoreEntriesFTS(sessionContext);
 
-      // Score project entries: prefer vector similarity, fall back to FTS5
-      const rawScored: Scored[] = projectEntries.map((entry) => {
-        const vecScore = vectorScores.get(entry.id);
-        const score =
-          vecScore != null
-            ? vecScore * entry.confidence
-            : (ftsScores.get(entry.id) ?? 0) * entry.confidence;
-        return { entry, score };
-      });
-      const matched = rawScored.filter((s) => s.score > 0);
-      const matchedIds = new Set(matched.map((s) => s.entry.id));
+      // Relevance floor: a VECTOR-ONLY signal must clear minRelevance to count
+      // as a match. Otherwise a near-orthogonal entry (e.g. a watchOS gotcha
+      // during a React Native task) scores a small positive cosine and pollutes
+      // the surfaced/overflow set — the "ranks but never filters" bug. An FTS
+      // keyword hit is inherently relevant, so it qualifies regardless of
+      // vecScore. Set knowledge.minRelevance to 0 to restore the old behavior.
+      const minRelevance = config().knowledge.minRelevance;
+      const isRelevant = (id: string): boolean => {
+        const vecScore = vectorScores.get(id);
+        // A vector match must be a POSITIVE cosine at or above the floor. The
+        // `> 0` clause preserves the pre-floor `score > 0` semantics when
+        // minRelevance is 0: an exactly-orthogonal (cosine 0) or negative entry
+        // is never surfaced on the vector signal alone.
+        if (vecScore != null && vecScore > 0 && vecScore >= minRelevance)
+          return true;
+        return (ftsScores.get(id) ?? 0) > 0;
+      };
+      const scoreOf = (entry: KnowledgeEntry): number => {
+        // Rank by the STRONGER of the two normalized signals (both are 0–1:
+        // cosine, and BM25 min-max normalized). An entry that qualified via a
+        // high FTS keyword score but has a present-but-below-floor cosine must
+        // not be under-ranked by that weak cosine — take the max, not the
+        // vector-preferred value. (Seer #1318.)
+        const vecScore = vectorScores.get(entry.id) ?? 0;
+        const ftsScore = ftsScores.get(entry.id) ?? 0;
+        return Math.max(vecScore, ftsScore) * entry.confidence;
+      };
 
-      // Safety net: top PROJECT_SAFETY_NET entries by confidence that weren't already matched.
-      // Given a tiny score (0.001 * confidence) so they sort below genuinely matched entries.
-      const safetyNet = projectEntries
-        .filter((e) => !matchedIds.has(e.id))
-        .slice(0, PROJECT_SAFETY_NET)
-        .map((e) => ({ entry: e, score: 0.001 * e.confidence }));
+      const matched = projectEntries
+        .filter((e) => isRelevant(e.id))
+        .map((entry) => ({ entry, score: scoreOf(entry) }));
+
+      // Safety net (fallback-only): when NOTHING clears the floor, keep the
+      // session useful with the top PROJECT_SAFETY_NET entries by confidence.
+      // When there ARE relevant matches, injecting unrelated top-confidence
+      // entries would re-pollute exactly what the floor removes, so skip it.
+      const safetyNet =
+        matched.length === 0
+          ? projectEntries
+              .slice(0, PROJECT_SAFETY_NET)
+              .map((e) => ({ entry: e, score: 0.001 * e.confidence }))
+          : [];
 
       scoredProject = [...matched, ...safetyNet];
 
-      // Cross-project: include entries matched by vector OR FTS5
+      // Cross-project: same relevance floor (vector-only must clear it; an FTS
+      // keyword hit qualifies).
       scoredCross = crossEntries
-        .filter((e) => vectorScores.has(e.id) || ftsScores.has(e.id))
-        .map((e) => {
-          const vecScore = vectorScores.get(e.id);
-          const score =
-            vecScore != null
-              ? vecScore * e.confidence
-              : (ftsScores.get(e.id) ?? 0) * e.confidence;
-          return { entry: e, score };
-        });
+        .filter((e) => isRelevant(e.id))
+        .map((e) => ({ entry: e, score: scoreOf(e) }));
     } else {
       // Vector failed — fall through to FTS5
       const ftsScores = await scoreEntriesFTS(sessionContext);
@@ -2677,6 +2695,10 @@ async function loadContextSourceCandidates(
   _sessionID?: string,
 ): Promise<Scored[]> {
   const out: Scored[] = [];
+  // Same relevance floor as knowledge: don't fold in a distillation/temporal
+  // chunk whose cosine to the session context is below the threshold (off-task
+  // noise). 0 disables.
+  const minRelevance = config().knowledge.minRelevance;
 
   const mkEntry = (
     id: string,
@@ -2741,6 +2763,11 @@ async function loadContextSourceCandidates(
         let added = 0;
         for (const h of hits) {
           if (added >= limit) break;
+          // Match the knowledge path's floor semantics: a context source must
+          // be a POSITIVE cosine at or above the floor. The `<= 0` clause keeps
+          // an exactly-orthogonal (or negative) hit out even when minRelevance
+          // is 0, so context sources and knowledge behave identically.
+          if (h.similarity <= 0 || h.similarity < minRelevance) continue;
           const r = byId.get(h.id);
           if (!r?.observations) continue;
           out.push({
@@ -2784,6 +2811,9 @@ async function loadContextSourceCandidates(
         const byId = new Map(rows.map((r) => [r.id, r]));
         const seen = new Set<string>();
         for (const h of hits) {
+          // Match the knowledge path's floor semantics (positive cosine at or
+          // above the floor); see the distillation source above.
+          if (h.similarity <= 0 || h.similarity < minRelevance) continue;
           const mid = h.id.split("#")[0];
           if (seen.has(mid)) continue;
           seen.add(mid);
@@ -2823,12 +2853,16 @@ function scoreFTS(
     score: (ftsScores.get(entry.id) ?? 0) * entry.confidence,
   }));
   const matched = rawScored.filter((s) => s.score > 0);
-  const matchedIds = new Set(matched.map((s) => s.entry.id));
 
-  const safetyNet = projectEntries
-    .filter((e) => !matchedIds.has(e.id))
-    .slice(0, PROJECT_SAFETY_NET)
-    .map((e) => ({ entry: e, score: 0.001 * e.confidence }));
+  // Fallback-only safety net (mirrors the vector path): only inject top-
+  // confidence entries when NO keyword match exists, so a genuine match set is
+  // never diluted by unrelated project knowledge.
+  const safetyNet =
+    matched.length === 0
+      ? projectEntries
+          .slice(0, PROJECT_SAFETY_NET)
+          .map((e) => ({ entry: e, score: 0.001 * e.confidence }))
+      : [];
 
   const scoredProject = [...matched, ...safetyNet];
 

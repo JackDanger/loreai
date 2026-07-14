@@ -12,6 +12,7 @@ import { uuidv7 } from "uuidv7";
 import { db, ensureProject } from "../src/db";
 import * as ltm from "../src/ltm";
 import * as embedding from "../src/embedding";
+import { config } from "../src/config";
 import {
   _resetVectorPoolForTest,
   _setTestVectorWorkerFactory,
@@ -1513,6 +1514,215 @@ describe("ltm.forSession — vector-path set stability (regression #727)", () =>
     );
     expect(got.has(ids[4])).toBe(true);
     expect(got.has(ids[3])).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ltm.forSession — relevance floor (off-task knowledge must not be surfaced)
+//
+// Ranks-but-never-filters was the bug: any positive cosine admitted an entry,
+// so a React Native session surfaced watchOS/OCR/GDPR entries from the same
+// (multi-task) project. A vector-only signal must now clear config().knowledge
+// .minRelevance; FTS keyword matches bypass it. Entry content below is chosen
+// to share NO tokens with the session context, so FTS never matches and the
+// mocked vector score is the sole signal.
+// ---------------------------------------------------------------------------
+
+describe("ltm.forSession — relevance floor", () => {
+  const PROJ = "/test/ltm/relevance-floor";
+  const SESSION = "relevance-floor-session";
+  let availableSpy: ReturnType<typeof vi.spyOn>;
+  let embedSpy: ReturnType<typeof vi.spyOn>;
+  let vectorSpy: ReturnType<typeof vi.spyOn>;
+  let scores: Map<string, number>;
+  let origMinRelevance: number;
+  const ids: string[] = [];
+
+  // Disjoint from the session context below → FTS never matches these.
+  const CONTENTS = [
+    "kubernetes ingress sidecar mesh rollout",
+    "protobuf schema registry backward wire",
+    "webassembly sandbox capability isolation",
+    "raytracing denoise kernel occupancy tuning",
+  ];
+
+  beforeEach(() => {
+    const pid = ensureProject(PROJ);
+    db().query("DELETE FROM knowledge WHERE project_id = ?").run(pid);
+    db().query("DELETE FROM temporal_messages WHERE project_id = ?").run(pid);
+    ids.length = 0;
+    for (let i = 0; i < CONTENTS.length; i++) {
+      ids.push(
+        ltm.create({
+          projectPath: PROJ,
+          category: "pattern",
+          title: `Floor entry ${i}`,
+          content: CONTENTS[i],
+          scope: "project",
+          crossProject: false,
+        }),
+      );
+    }
+    // Session context shares no tokens with any entry → pure vector signal.
+    db()
+      .query(
+        "INSERT INTO temporal_messages (id, project_id, session_id, role, content, tokens, distilled, created_at, metadata) VALUES (?, ?, ?, ?, ?, ?, 0, ?, '{}')",
+      )
+      .run(
+        "floor-msg-1",
+        pid,
+        SESSION,
+        "user",
+        "quarterly financial reconciliation ledger audit invoice",
+        20,
+        Date.now(),
+      );
+
+    scores = new Map();
+    availableSpy = vi.spyOn(embedding, "isAvailable").mockReturnValue(true);
+    embedSpy = vi
+      .spyOn(embedding, "embed")
+      .mockResolvedValue([new Float32Array([1, 0, 0])]);
+    vectorSpy = vi
+      .spyOn(embedding, "vectorSearch")
+      .mockImplementation(async () =>
+        [...scores.entries()].map(([id, similarity]) => ({ id, similarity })),
+      );
+    origMinRelevance = config().knowledge.minRelevance;
+  });
+
+  afterEach(() => {
+    availableSpy.mockRestore();
+    embedSpy.mockRestore();
+    vectorSpy.mockRestore();
+    config().knowledge.minRelevance = origMinRelevance;
+  });
+
+  // Budget large enough to fit ALL four entries, so any exclusion is due to the
+  // floor, not the token budget.
+  const WIDE = 8000;
+
+  test("drops vector-only entries below the floor, keeps those above", async () => {
+    config().knowledge.minRelevance = 0.35;
+    scores = new Map([
+      [ids[0], 0.62], // above
+      [ids[1], 0.4], // above
+      [ids[2], 0.2], // below → dropped
+      [ids[3], 0.1], // below → dropped
+    ]);
+    const got = new Set(
+      (await ltm.forSession(PROJ, SESSION, WIDE)).map((e) => e.id),
+    );
+    expect(got.has(ids[0])).toBe(true);
+    expect(got.has(ids[1])).toBe(true);
+    expect(got.has(ids[2])).toBe(false);
+    expect(got.has(ids[3])).toBe(false);
+  });
+
+  test("FTS-qualified entry is ranked by its FTS score, not a weak below-floor cosine (Seer #1318)", async () => {
+    // An entry whose content shares keywords with the session context gets an
+    // FTS hit (qualifies past the floor) even with a below-floor cosine. scoreOf
+    // must rank it by the STRONGER signal (FTS), else a tight budget under-ranks
+    // and drops it below an above-floor-but-lower-combined competitor.
+    config().knowledge.minRelevance = 0.35;
+    // Matches the session context "quarterly financial reconciliation ledger
+    // audit invoice" on multiple tokens → strong FTS (BM25) score.
+    const ftsId = ltm.create({
+      projectPath: PROJ,
+      category: "pattern",
+      title: "Ledger entry",
+      content:
+        "quarterly financial reconciliation ledger audit invoice workflow",
+      scope: "project",
+      crossProject: false,
+    });
+    // ftsId has a present-but-below-floor cosine; a vector-only competitor sits
+    // just above the floor. Old scoreOf ranked ftsId by 0.1 (loses); the max()
+    // fix ranks it by its high FTS score (wins its slot).
+    scores = new Map([
+      [ftsId, 0.1], // below floor on the vector signal
+      [ids[0], 0.4], // above floor, but no FTS overlap
+    ]);
+    const ranked = (await ltm.forSession(PROJ, SESSION, WIDE)).map((e) => e.id);
+    expect(ranked).toContain(ftsId); // qualified via FTS, must be present
+    // Ranked ahead of the weak above-floor vector-only entry.
+    expect(ranked.indexOf(ftsId)).toBeLessThan(ranked.indexOf(ids[0]));
+    db().query("DELETE FROM knowledge WHERE logical_id = ?").run(ftsId);
+  });
+
+  test("safety net is fallback-only: nothing clears the floor → top entries still surface", async () => {
+    config().knowledge.minRelevance = 0.35;
+    // Every entry is below the floor → no genuine match.
+    scores = new Map(ids.map((id) => [id, 0.1]));
+    const got = await ltm.forSession(PROJ, SESSION, WIDE);
+    // Fallback keeps the session useful rather than returning nothing.
+    expect(got.length).toBeGreaterThan(0);
+  });
+
+  test("minRelevance = 0 disables the floor (pre-#1211 behavior)", async () => {
+    config().knowledge.minRelevance = 0;
+    scores = new Map([
+      [ids[0], 0.62],
+      [ids[1], 0.2],
+      [ids[2], 0.1],
+      [ids[3], 0.05],
+    ]);
+    const got = new Set(
+      (await ltm.forSession(PROJ, SESSION, WIDE)).map((e) => e.id),
+    );
+    // With the floor disabled, low-similarity entries are surfaced again.
+    expect(got.has(ids[1])).toBe(true);
+    expect(got.has(ids[2])).toBe(true);
+  });
+
+  test("minRelevance = 0 still excludes an exactly-orthogonal (cosine 0) entry", async () => {
+    // Seer #1318: with the floor at 0, `vecScore >= 0` would admit a cosine-0
+    // entry, diverging from the pre-floor `score > 0` semantics. A vector match
+    // must be a POSITIVE cosine. ids[1] has an exact-0 score and no FTS hit, so
+    // it must NOT surface; ids[0] (positive) still does.
+    config().knowledge.minRelevance = 0;
+    scores = new Map([
+      [ids[0], 0.5],
+      [ids[1], 0],
+    ]);
+    const got = new Set(
+      (await ltm.forSession(PROJ, SESSION, WIDE)).map((e) => e.id),
+    );
+    expect(got.has(ids[0])).toBe(true);
+    expect(got.has(ids[1])).toBe(false);
+  });
+
+  test("applies the floor to the CROSS-PROJECT pool (below-floor cross entry dropped)", async () => {
+    // A cross-project entry lives in a DIFFERENT project so it enters the cross
+    // pool for this session. With only a below-floor vector score and no FTS
+    // hit, it must NOT surface. Guards the cross-pool isRelevant branch (Seer
+    // #1318 coverage gap: the base floor tests seed only crossProject:false).
+    config().knowledge.minRelevance = 0.35;
+    const crossId = ltm.create({
+      projectPath: "/test/ltm/relevance-floor-OTHER",
+      category: "pattern",
+      title: "Cross off-task",
+      content: "mainframe cobol batch job control language",
+      scope: "project",
+      crossProject: true,
+    });
+    // Above-floor local entry (so there IS a match set) + below-floor cross.
+    scores = new Map([
+      [ids[0], 0.6],
+      [crossId, 0.1],
+    ]);
+    const got = new Set(
+      (await ltm.forSession(PROJ, SESSION, WIDE)).map((e) => e.id),
+    );
+    expect(got.has(ids[0])).toBe(true);
+    expect(got.has(crossId)).toBe(false);
+    // Above the floor, the same cross entry DOES surface.
+    scores.set(crossId, 0.6);
+    const got2 = new Set(
+      (await ltm.forSession(PROJ, SESSION, WIDE)).map((e) => e.id),
+    );
+    expect(got2.has(crossId)).toBe(true);
+    db().query("DELETE FROM knowledge WHERE logical_id = ?").run(crossId);
   });
 });
 
