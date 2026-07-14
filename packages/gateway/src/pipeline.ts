@@ -714,14 +714,59 @@ export function fnv1a(s: string): string {
 }
 
 /**
+ * Materiality-aware surface signature for a knowledge entry, used as the hash
+ * half of every `id:hash` surfaced/pin key. Hashing a NORMALIZED form (title +
+ * content, lowercased, punctuation stripped, whitespace collapsed) means a
+ * cosmetic curator reword — reflow/whitespace, added/removed punctuation, a
+ * capitalization change — yields the SAME signature. Consequences, all flowing
+ * from the single definition:
+ *   - `detectSurfacedMutations`: `currentSig === surfacedSig` → no `changed`
+ *     entry → no mid-session delta block for a trivial reword.
+ *   - `ltmEntryKeys` (pin identity) + `hasMaterialLtmDelta`: the pin key is
+ *     unchanged, so `setUnchanged` stays true → system[2] keeps its byte-stable
+ *     pinned text and never re-pins on a cosmetic edit.
+ * Because the KEY itself is unchanged for an immaterial edit, the surfaced set
+ * needs no advancing and the check never re-fires per turn (the 🔴 invariant).
+ * A genuine title or content change changes the signature and fires normally.
+ * NOTE: category is deliberately NOT part of the signature — a category-only
+ * edit keeps the same key, so the pin is reused and the model keeps the old
+ * `### Category` grouping until the next natural re-pin (consistent with the
+ * materiality intent; a bare re-grouping is not worth a mid-session cache bust).
+ * The material (substantive) edit surfaces on the next natural re-pin.
+ */
+export function surfaceSignature(title: string, content: string): string {
+  const normalize = (s: string): string =>
+    s
+      .toLowerCase()
+      // Strip only COSMETIC punctuation: markdown scaffolding (*_`~#),
+      // quotes/brackets, and the sentence separators . , ; : … — Deliberately
+      // KEEP operator/comparator/boolean chars (= < > & | + / ^ % - ! ?) so a
+      // MATERIAL edit that changes only symbols is not collapsed to the same
+      // signature — e.g. `>= floor` vs `> floor`, `x == y` vs `x != y`,
+      // `a || b` vs `a && b`, `foo?.bar` vs `foo.bar` must remain distinct.
+      // `!`/`?` are kept (needed for `!=`, `?.`, ternary) at the cost of a cheap
+      // false-positive delta on an "excited!" reword — the safe failure mode.
+      // Em/en dashes (— –) are cosmetic typography (an AI-tell in prose) and
+      // are stripped; the ASCII hyphen-minus `-` is KEPT since it doubles as
+      // the arithmetic/negation operator.
+      .replace(/["'`*_~#()[\]{}.,;:…—–]/gu, " ")
+      // Collapse all whitespace runs to a single space and trim.
+      .replace(/\s+/g, " ")
+      .trim();
+  return fnv1a(`${normalize(title)}\x1f${normalize(content)}`);
+}
+
+/**
  * Compute the sorted entry-key array for a set of context-bound LTM entries.
- * Each key is `"<id>:<hash(title+content)>"`. Sorted so order is canonical:
- * the same set of entries always produces the same key array regardless of
- * ranking order, which is exactly the property the reorder-tolerant pin needs.
+ * Each key is `"<id>:<surfaceSignature(title, content)>"` — a MATERIALITY-aware
+ * signature (normalized title+content), so a cosmetic reword keeps the key
+ * stable (see {@link surfaceSignature}). Sorted so order is canonical: the same
+ * set of entries always produces the same key array regardless of ranking
+ * order, which is exactly the property the reorder-tolerant pin needs.
  *
  * When `renderedIds` is provided, only those entries (the ones that survived
  * budget packing in formatKnowledge and are actually in the rendered text) are
- * keyed — so the key set always matches the rendered string byte-for-byte.
+ * keyed — so the key set tracks the rendered selection.
  */
 export function ltmEntryKeys(
   entries: Array<{ id: string; title: string; content: string }>,
@@ -733,7 +778,7 @@ export function ltmEntryKeys(
     source = entries.filter((e) => allow.has(e.id));
   }
   return source
-    .map((e) => `${e.id}:${fnv1a(`${e.title}\x1f${e.content}`)}`)
+    .map((e) => `${e.id}:${surfaceSignature(e.title, e.content)}`)
     .sort();
 }
 
@@ -793,6 +838,45 @@ export function sameEntryKeys(
     if (a[i] !== b[i]) return false;
   }
   return true;
+}
+
+/** True when two id sets contain exactly the same ids. */
+export function sameIdSet(a: Set<string>, b: Set<string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const id of a) {
+    if (!b.has(id)) return false;
+  }
+  return true;
+}
+
+/**
+ * Decide whether a persisted pin's `entryKeys` should be silently re-anchored
+ * to the freshly-computed `cachedKeys` WITHOUT counting as a change. This is the
+ * key-format migration guard for the surfaceSignature switch (#1320): a pin
+ * persisted with the old `id:fnv1a(title\x1f content)` keys mismatches the new
+ * normalized-signature keys on the first post-deploy turn even though the
+ * selection is identical. Re-anchoring costs zero cache bust when — and only
+ * when — it is provably the SAME selection:
+ *   1. the keys actually differ (nothing to do otherwise),
+ *   2. the freshly rendered text is byte-identical to the pinned text (so
+ *      system[2] would render the same bytes — no content change hides here),
+ *   3. the id SETS are identical (same entries, only the hash encoding moved).
+ * A genuine content edit fails (2); a set change fails (3). Both correctly fall
+ * through to the normal re-pin path.
+ *
+ * @internal Exported for tests.
+ */
+export function shouldReanchorPinKeys(
+  pinnedKeys: string[],
+  cachedKeys: string[],
+  cachedFormatted: string,
+  pinnedFormatted: string,
+): boolean {
+  return (
+    !sameEntryKeys(pinnedKeys, cachedKeys) &&
+    cachedFormatted === pinnedFormatted &&
+    sameIdSet(entryKeyIds(pinnedKeys), entryKeyIds(cachedKeys))
+  );
 }
 
 const KNOWLEDGE_DELTA_TOKEN_BUDGET = 400;
@@ -1372,7 +1456,7 @@ function changedLtmEntries(
   const nextIDs = entryKeyIds(nextKeys);
   return entries.filter((entry) => {
     if (!nextIDs.has(entry.id)) return false;
-    const nextKey = `${entry.id}:${fnv1a(`${entry.title}\x1f${entry.content}`)}`;
+    const nextKey = `${entry.id}:${surfaceSignature(entry.title, entry.content)}`;
     return previous.get(entry.id) !== nextKey;
   });
 }
@@ -1415,15 +1499,17 @@ function hasMaterialLtmDelta(input: {
  * 1LYkXZ7jkiHHnqPl: read pinned at 41k, ~250k rewritten per turn).
  *
  * This trigger ignores ranking entirely. `surfacedKeys` is the set of
- * `id:fnv1a(title\x1f content)` keys the model has ALREADY been shown. Today
- * every call site passes the FROZEN system[2] pin keys (`pinned.entryKeys`),
- * so the result is the cumulative delta from the pinned baseline — preserving
- * the single-coalesced-row contract. (The append-only follow-up will widen
- * this to the pin ∪ already-appended blocks.) For each key we look up the
- * entry's CURRENT state in the DB and compare the content hash:
+ * `id:surfaceSignature(title, content)` keys the model has ALREADY been shown.
+ * Today every call site passes the FROZEN system[2] pin keys
+ * (`pinned.entryKeys`), so the result is the cumulative delta from the pinned
+ * baseline — preserving the single-coalesced-row contract. (The append-only
+ * follow-up will widen this to the pin ∪ already-appended blocks.) For each key
+ * we look up the entry's CURRENT state in the DB and compare the MATERIALITY
+ * signature:
  *   - missing  → the entry was deleted/superseded → `removedIds`
- *   - hash differs → genuine content edit (curator/consolidation) → `changed`
- *   - hash same → no signal (NOT in the result), no matter the ranking
+ *   - sig differs → MATERIAL content edit (curator/consolidation) → `changed`
+ *   - sig same → no signal (NOT in the result), whether ranking churned OR the
+ *     edit was cosmetic (whitespace/punctuation/case only — see surfaceSignature)
  *
  * A delta is emitted iff `changed ∪ removedIds` is non-empty, so a steady
  * session with no real knowledge change emits zero deltas and never busts.
@@ -1479,7 +1565,7 @@ export function detectSurfacedMutations(surfacedKeys: string[] | undefined): {
       if (ltm.isTombstoned(logicalId)) removedIds.push(id);
       continue;
     }
-    const currentHash = fnv1a(`${current.title}\x1f${current.content}`);
+    const currentHash = surfaceSignature(current.title, current.content);
     if (currentHash !== surfacedHash) {
       // Report under the id the model already knows (the surfaced id), so the
       // delta's recall tokens and any later supersession matching stay in the
@@ -1754,7 +1840,7 @@ export function appendKnowledgePromptDelta(input: {
   const mut: DeltaMutation = {
     changed: changed.map((c) => ({
       id: c.id,
-      h: fnv1a(`${c.title}\x1f${c.content}`),
+      h: surfaceSignature(c.title, c.content),
     })),
     removed: removedIds,
   };
@@ -7245,6 +7331,26 @@ async function handleConversationTurn(
           // selected set changes, an entry's content changed (curator update),
           // or there is no pin yet. See ltmPinnedText docs.
           const pinned = ltmPinnedText.get(sessionID);
+          // Key-format migration guard (#1320): a persisted pin from before the
+          // surfaceSignature change stores entryKeys in the old
+          // `id:fnv1a(title\x1f content)` format. On the first post-deploy turn
+          // the recomputed `cachedKeys` use the new normalized signature, so a
+          // pure element-wise compare would spuriously mismatch and re-pin (one-
+          // time cache bust for every warm session). shouldReanchorPinKeys
+          // detects the SAME selection in a new key encoding (same id set +
+          // byte-identical rendered text) so we re-anchor with zero bust.
+          if (
+            pinned?.entryKeys &&
+            cachedKeys &&
+            shouldReanchorPinKeys(
+              pinned.entryKeys,
+              cachedKeys,
+              cached.formatted,
+              pinned.formatted,
+            )
+          ) {
+            pinned.entryKeys = cachedKeys;
+          }
           const setUnchanged = cachedKeys
             ? // Recompute path: compare entry-key sets.
               sameEntryKeys(pinned?.entryKeys, cachedKeys)
