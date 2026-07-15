@@ -185,13 +185,20 @@ const continueProvider: AgentHistoryProvider = {
   name: "continue",
   displayName: "Continue",
 
-  detect(projectPath: string): DetectedSession[] {
+  detect(projectPaths: string[]): DetectedSession[] {
     const sessions: DetectedSession[] = [];
+    const pathSet = new Set(projectPaths);
     const index = loadSessionIndex();
 
+    // No explicit `seen` set is needed for dedup: a session has exactly one
+    // `workspaceDirectory`, so the `pathSet.has()` filter yields each session
+    // at most once even when candidate paths overlap. The fallback scan below
+    // additionally guards against re-adding an already-indexed session via
+    // `existingIds`.
     for (const meta of index) {
-      // Filter by workspace directory
-      if (meta.workspaceDirectory !== projectPath) continue;
+      // Filter by workspace directory (main checkout or a sibling worktree).
+      if (!meta.workspaceDirectory || !pathSet.has(meta.workspaceDirectory))
+        continue;
 
       // Load the full session to count messages
       const session = loadSession(meta.sessionId);
@@ -236,7 +243,11 @@ const continueProvider: AgentHistoryProvider = {
 
         const session = loadSession(sessionId);
         if (!session) continue;
-        if (session.workspaceDirectory !== projectPath) continue;
+        if (
+          !session.workspaceDirectory ||
+          !pathSet.has(session.workspaceDirectory)
+        )
+          continue;
         if (!session.history || session.history.length < 3) continue;
 
         const dateStr = session.title
