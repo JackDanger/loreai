@@ -16,6 +16,7 @@ import {
 } from "@loreai/core";
 import { createGatewayLLMClient } from "../llm-adapter";
 import { resolveAuth } from "../auth";
+import { registerPendingImport } from "../pending-import";
 import type { GatewayConfig } from "../config";
 
 const {
@@ -120,9 +121,6 @@ export async function maybeAutoImport(
 
   if (!ok) return;
 
-  // Run import in the background (fire-and-forget)
-  console.log("[lore] Importing knowledge in background...");
-
   const cfg = loreConfig();
   const defaultModel = cfg.model ?? {
     providerID: "anthropic",
@@ -137,10 +135,62 @@ export async function maybeAutoImport(
     defaultModel,
   );
 
-  // Fire-and-forget — don't await, let it run while the agent starts
-  runBackgroundImport(llm, projectPath, results, defaultModel).catch(() => {
-    // Background import failed — non-fatal, don't alarm the user.
-  });
+  const hasWorkerKey = !!gatewayConfig.workerApiKey;
+
+  const job = (authedProviderID?: string) => {
+    // The extraction runs on the configured default model. If the first turn
+    // authenticated a DIFFERENT provider (e.g. session=openai but default
+    // model=anthropic) and no credential resolves for the model's provider,
+    // the extraction can't authenticate — skip loudly rather than silently
+    // churning no-auth. A matching/agnostic credential (or worker key) proceeds.
+    const usable =
+      hasWorkerKey || resolveAuth(undefined, defaultModel.providerID) != null;
+    if (!usable) {
+      // Never leave a promised import silently dropped: we told the user it
+      // would "start after your first message". Explain the mismatch when we
+      // know the provider; otherwise give a generic, still-actionable notice.
+      if (authedProviderID && authedProviderID !== defaultModel.providerID) {
+        console.log(
+          `[lore] Skipping knowledge import: your session uses ${authedProviderID}, ` +
+            `but import is configured for ${defaultModel.providerID}. ` +
+            `Run \`lore import\` once authenticated with ${defaultModel.providerID}.`,
+        );
+      } else {
+        console.log(
+          `[lore] Skipping knowledge import: no usable ${defaultModel.providerID} ` +
+            `credential is available. Run \`lore import\` once authenticated.`,
+        );
+      }
+      return Promise.resolve();
+    }
+    return runBackgroundImport(
+      llm,
+      projectPath,
+      results,
+      defaultModel,
+      hasWorkerKey,
+    ).catch(() => {
+      // Background import failed — non-fatal, don't alarm the user.
+    });
+  };
+
+  // A dedicated worker key is always usable, so the import can run right away.
+  // Otherwise we must WAIT for a real credential: at `lore run` startup no turn
+  // has been proxied yet, so resolveAuth() is null and firing now would make
+  // every extraction call fail no-auth (session=_unknown), churn the whole
+  // backlog, and produce zero knowledge. Defer until the first authenticated
+  // turn binds a credential (pipeline flushes via flushPendingImport()).
+  const hasCredential =
+    hasWorkerKey || resolveAuth(undefined, defaultModel.providerID) != null;
+
+  if (hasCredential) {
+    console.log("[lore] Importing knowledge in background...");
+    void job();
+  } else {
+    // Fire-and-forget once the first authenticated turn arrives.
+    registerPendingImport(job);
+    console.log("[lore] Knowledge import will start after your first message.");
+  }
 }
 
 async function runBackgroundImport(
@@ -148,7 +198,16 @@ async function runBackgroundImport(
   projectPath: string,
   results: import("@loreai/core").conversationImport.DetectionResult[],
   model: { providerID: string; modelID: string },
+  hasWorkerKey: boolean,
 ): Promise<void> {
+  // Final auth guard: never churn a large backlog when no credential is
+  // resolvable. Every extraction call would fail no-auth and produce zero
+  // knowledge. Callers already gate on this, but the deferred path could race
+  // a credential going stale between the flush trigger and this run.
+  if (!hasWorkerKey && resolveAuth(undefined, model.providerID) == null) {
+    return;
+  }
+
   let totalCreated = 0;
   let totalUpdated = 0;
 
