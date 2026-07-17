@@ -2,6 +2,7 @@ import { micromark } from "micromark";
 import { remark } from "remark";
 import type {
   Root,
+  Nodes,
   Heading,
   List,
   ListItem,
@@ -54,14 +55,47 @@ export function inline(value: string): string {
 
 // Upper bound on parse→stringify passes in `normalize`. remark's escaping is
 // monotone (each pass can only add backslash escapes for newly-ambiguous
-// sequences) and converges; across a 300k-sample fast-check search the worst
-// observed input reached a fixpoint in 4 passes with zero oscillations, so 8
-// is a generous safety bound.
+// sequences) and converges once the html-node trailing-whitespace pump in
+// `roundtrip` is neutralized (see below). Across a 200k-sample fast-check
+// search — with HTML-block triggers (`<?`, `<!`) added to the generator, the
+// class that regressed as #1357 — the worst observed input reached a fixpoint
+// in 4 passes with zero oscillations, so 8 is a generous safety bound.
 const MAX_NORMALIZE_PASSES = 8;
+
+// Strip trailing newlines from every `html` node's value, in place.
+//
+// An HTML block absorbs the blank line(s) that separate it from the next
+// block into its own `value` on parse; `stringify` then re-supplies that
+// separator, so a plain parse→stringify roundtrip *grows* the trailing
+// newline run by a fixed amount every pass and never reaches a fixpoint
+// (issue #1357: `* <?\n\n1.\n` — a list item whose content is an HTML block,
+// followed by another list). Trimming the trailing newline run breaks the
+// pump, making the roundtrip convergent.
+//
+// We trim newlines only (`/\n+$/`), not all whitespace: trailing spaces/tabs
+// are never part of the blank-line separator, so leaving them keeps the trim
+// as narrow as possible. This is lossless for the common case (the separator
+// remark re-supplies). The one construction where it is *not* purely a
+// separator — an HTML block split across a list boundary, so that content
+// belonging inside the block (e.g. `<pre>` internal blank lines) lands at the
+// node's trailing edge — is a rare, already-lossy input; `normalize` is only
+// applied to untrusted text in Layer-4 emergency compression, so collapsing a
+// runaway newline run there is acceptable.
+function stripHtmlTrailingWhitespace(node: Nodes): void {
+  if (node.type === "html") {
+    node.value = node.value.replace(/\n+$/, "");
+    return;
+  }
+  if ("children" in node) {
+    for (const child of node.children) stripHtmlTrailingWhitespace(child);
+  }
+}
 
 // One markdown parse → stringify roundtrip.
 function roundtrip(md: string): string {
-  return processor.stringify(processor.parse(md));
+  const tree = processor.parse(md);
+  stripHtmlTrailingWhitespace(tree);
+  return processor.stringify(tree);
 }
 
 /**
@@ -79,10 +113,12 @@ function roundtrip(md: string): string {
  *    forever.
  *
  * For the real markdown roundtrip the cap and oscillation cases never fire —
- * remark's escaping is monotone, so the sequence strictly grows until it
+ * remark's escaping is monotone and, with the html-node trailing-whitespace
+ * pump neutralized (see `roundtrip`), the sequence strictly grows until it
  * stabilizes — but they guard against a future serializer regression that
- * could oscillate. Exported so tests can drive the convergence / cycle / cap
- * branches with synthetic steps (real markdown only ever hits convergence).
+ * could oscillate or diverge (as #1357 did before the pump was fixed).
+ * Exported so tests can drive the convergence / cycle / cap branches with
+ * synthetic steps (real markdown only ever hits convergence).
  */
 export function iterateToFixpoint(
   seed: string,
@@ -108,9 +144,11 @@ export function iterateToFixpoint(
 // can introduce new ambiguous sequences (e.g. `**` adjacent to already-escaped
 // asterisks becomes `\*\*`) that only stabilize on a *later* pass. A fixed two
 // passes was not enough for some hostile inputs (issue #959), so we iterate to
-// a fixpoint (bounded by MAX_NORMALIZE_PASSES). For the monotone remark
-// transform this guarantees the result is itself already-normalized:
-// normalize(normalize(x)) === normalize(x).
+// a fixpoint (bounded by MAX_NORMALIZE_PASSES). A separate hazard — an HTML
+// block that keeps swallowing and re-emitting its trailing blank-line
+// separator, growing without bound (issue #1357) — is neutralized inside
+// `roundtrip`. Together these make the transform converge, so the result is
+// itself already-normalized: normalize(normalize(x)) === normalize(x).
 export function normalize(md: string): string {
   return iterateToFixpoint(roundtrip(md), roundtrip);
 }
