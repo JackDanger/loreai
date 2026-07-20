@@ -1,82 +1,101 @@
-<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/"><channel><title>Lore Blog</title><description>Product notes, engineering updates, and memory architecture deep dives from Lore.</description><link>https://withlore.ai/</link><language>en-us</language><atom:link href="https://withlore.ai/rss.xml" rel="self" type="application/rss+xml"/><item><title>Let your past decisions review the code</title><link>https://withlore.ai/blog/review-with-memory/</link><guid isPermaLink="true">https://withlore.ai/blog/review-with-memory/</guid><description>&quot;We read the code&quot; and &quot;automate the review&quot; are usually framed as opposites. The part worth automating isn&apos;t judgment. It&apos;s memory: catching the change that contradicts a decision nobody on the PR happens to recall.</description><pubDate>Mon, 20 Jul 2026 00:00:00 GMT</pubDate><content:encoded>&lt;p&gt;There’s a real argument happening right now about what review is for. One camp says the point
-of writing code with agents is that a human still reads every line before it ships. The other
-says manual review is a bottleneck we should be automating away. We land on the automation
-side, but we think the way the debate is usually drawn misses the part that actually matters.&lt;/p&gt;
-&lt;p&gt;Because most of what “read the code” is defending is worth defending. Taste, judgment, whether
-the change is the right change at all, whether it fits where the codebase is going. A machine
-is not about to take that over, and we are not trying to. What we want to talk about is the
-part of review that has nothing to do with judgment and everything to do with memory, because
-that part is where humans are weakest and where a system can genuinely help.&lt;/p&gt;
-&lt;h2 id=&quot;the-decision-nobody-on-the-pr-remembers&quot;&gt;The decision nobody on the PR remembers&lt;/h2&gt;
-&lt;p&gt;Here is the failure we keep seeing. Six months ago the team decided, for good reasons, not to
-do a certain thing. Maybe you don’t mock the database in integration tests, because the last
-time someone did it hid a migration bug for a week. Maybe deploys only ever go out from the
-release branch. The decision was made, it was sound, and everyone moved on.&lt;/p&gt;
-&lt;p&gt;Then a pull request quietly reintroduces exactly that thing. Not out of carelessness. The
-author simply wasn’t in the room when the decision was made, or was, and it was a year ago.
-The one reviewer who would catch it in a heartbeat isn’t on this PR. So it merges, and the
-lesson gets relearned the expensive way.&lt;/p&gt;
-&lt;p&gt;Notice what kind of failure this is. Nobody exercised bad judgment. The change looks
-reasonable in isolation. What was missing was not a smarter reviewer. It was a reviewer who
-happened to remember one specific decision at the exact moment it was being contradicted. That
-is not a judgment problem. It is a recall problem wearing a review problem’s clothes.&lt;/p&gt;
+<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/"><channel><title>Lore Blog</title><description>Product notes, engineering updates, and memory architecture deep dives from Lore.</description><link>https://withlore.ai/</link><language>en-us</language><atom:link href="https://withlore.ai/rss.xml" rel="self" type="application/rss+xml"/><item><title>Let your past decisions review the code</title><link>https://withlore.ai/blog/review-with-memory/</link><guid isPermaLink="true">https://withlore.ai/blog/review-with-memory/</guid><description>&quot;Read every line&quot; and &quot;we just review AI slop now&quot; are one complaint. The part worth automating was never judgment. It&apos;s recalling what the team already decided.</description><pubDate>Mon, 20 Jul 2026 00:00:00 GMT</pubDate><content:encoded>&lt;p&gt;About ten years ago, when machine learning got good enough that you could train a real
+classifier without a research lab, I had a specific daydream. I wanted to train something that
+reviewed code the way I did, so I could step back from reviewing every change without the
+codebase drifting and without losing the thing reviews were quietly doing for the team. I never
+built it. I never had enough of the right data, and I never had the time. It stayed a daydream.&lt;/p&gt;
+&lt;p&gt;I’m bringing it up because the debate about review has finally caught up to it, and I think both
+sides are half right in a way that’s worth untangling.&lt;/p&gt;
+&lt;h2 id=&quot;two-complaints-that-are-the-same-complaint&quot;&gt;Two complaints that are the same complaint&lt;/h2&gt;
+&lt;p&gt;One camp says the whole point of writing code with agents is that a human still reads every line
+before it ships. Slow down, look closely, stay in control. The other camp, often the same people
+on a different day, says the job has quietly turned into something worse: you don’t write much
+anymore, you sit and read change after change the machine produced, and it is dull and a little
+soul-crushing. Reviewing slop, they call it.&lt;/p&gt;
+&lt;p&gt;Those sound like opposite positions. They are the same complaint. Review used to be where
+judgment happened and where the team learned how the codebase was meant to work. Now, for a lot
+of people, it has shrunk to a checkpoint you sign off on. The “read every line” camp wants to
+protect what review was. The “this is soul-crushing” camp is telling you it has already gone.
+Neither wants less care in the codebase. Both are answering the same loss.&lt;/p&gt;
+&lt;p&gt;A colleague told me the human side of this a few months ago. When he joined the team, he said, he
+learned a lot from getting detailed code reviews from me, the kind where you explain not just what
+to change but why the team does it that way. These days we mostly work on our own, agents write
+and review most of the code, and he told me he kind of misses that. He wasn’t complaining about
+speed. He was noticing that something had stopped passing between us.&lt;/p&gt;
+&lt;h2 id=&quot;what-review-was-really-passing-along&quot;&gt;What review was really passing along&lt;/h2&gt;
+&lt;p&gt;That’s the part the speed argument misses. A review was never only a gate. It was how one
+person’s memory of a decision reached everyone else. You don’t mock the database in integration
+tests, and here’s the migration bug that taught us why. Deploys go from the release branch,
+because of the time they didn’t. The rule arrived with its reason, at the moment it mattered, to
+whoever happened to be on the change.&lt;/p&gt;
+&lt;p&gt;When that stops, the rules don’t disappear. They just stop showing up when they’re needed. Here
+is the failure we kept hitting, the one that made me want to build the daydream in the first
+place: six months later a pull request quietly brings back the exact thing the team decided
+against. Not out of carelessness. The author wasn’t in the room when the decision was made, or
+was, and it was a year ago. The one reviewer who would catch it at once isn’t on this PR. So it
+merges, and the team learns the lesson again the expensive way.&lt;/p&gt;
+&lt;p&gt;Look closely at what kind of failure that is. Nobody used bad judgment. The change looks
+reasonable on its own. What was missing wasn’t a smarter reviewer. It was a reviewer who happened
+to remember one decision at the moment it was being broken. That is not a problem of judgment. It
+is a problem of memory that only looks like a problem of review.&lt;/p&gt;
 &lt;h2 id=&quot;you-already-wrote-the-rule-down&quot;&gt;You already wrote the rule down&lt;/h2&gt;
-&lt;p&gt;If your team uses Lore, that decision is not lost. It’s sitting in
+&lt;p&gt;If your team uses Lore, that decision isn’t lost. It’s sitting in
 &lt;a href=&quot;https://withlore.ai/docs/team-memory/&quot;&gt;&lt;code&gt;.lore.md&lt;/code&gt;&lt;/a&gt;, a version-controlled file of the decisions, patterns, and
-gotchas the team has accumulated, exported as plain Markdown and reviewed in pull requests
-like any other file. We’ve written before about
+gotchas the team has accumulated, exported as plain Markdown and reviewed in pull requests like
+any other file. We’ve written before about
 &lt;a href=&quot;https://withlore.ai/blog/distill-your-own-knowledge/&quot;&gt;why that knowledge lives in text&lt;/a&gt; rather than baked into a
 model: text is something you can read, diff, carry to the next model, and correct a line at a
 time.&lt;/p&gt;
-&lt;p&gt;But a written rule that only a human can act on has the same weakness as the human. It only
+&lt;p&gt;But a written rule that only a human can act on has the same weakness the human does. It only
 helps if someone reads it at the right moment. The file knows the team decided not to mock the
-database. The question is whether that knowledge can do anything on its own, or whether it just
-waits, again, for a person to remember it’s there.&lt;/p&gt;
-&lt;h2 id=&quot;memory-that-can-intervene&quot;&gt;Memory that can intervene&lt;/h2&gt;
-&lt;p&gt;This is the shift we care about. A memory store that only answers when asked is passive. It
-recalls; it never intervenes. The more useful thing is knowledge that shows up on its own at
-the moment it’s relevant, which for a team decision is the moment a change is about to
-contradict it.&lt;/p&gt;
+database. The open question is whether that knowledge can do anything on its own, or whether it
+just waits, again, for a person to remember it’s there.&lt;/p&gt;
+&lt;h2 id=&quot;memory-that-can-step-in&quot;&gt;Memory that can step in&lt;/h2&gt;
+&lt;p&gt;This is the narrow thing I actually wanted ten years ago, and it turns out it was the achievable
+part all along. Not a bot that reproduces my judgment. A memory that speaks up.&lt;/p&gt;
 &lt;p&gt;So we built a check that reads the diff against the rules. On every pull request, Lore’s
 &lt;a href=&quot;https://withlore.ai/docs/guides/semantic-linter/&quot;&gt;semantic linter&lt;/a&gt; takes the changes and the invariants from
-&lt;code&gt;.lore.md&lt;/code&gt; and asks, for the pairs that look related, a narrow question: does this change
+&lt;code&gt;.lore.md&lt;/code&gt; and asks, for the pairs that look related, one narrow question: does this change
 contradict this documented decision? When it thinks the answer is yes, it says so, as an
-annotation on the PR, next to the line.&lt;/p&gt;
-&lt;p&gt;It is a judge, not a rule engine, and that distinction is the whole point. “Never mock the
-database in integration tests” is not a pattern you can match with a regex. It’s a meaning. You
-can only check it by understanding what the change does and what the rule intends, which is
-exactly the kind of reading we used to need a person for. The tradeoff is that a judge produces
-suspicions, not verdicts. It can be wrong. We designed around that rather than pretending
-otherwise.&lt;/p&gt;
+annotation on the PR, next to the line, with the reason attached. The reason is the point. It’s
+the part of the review that used to travel by hand.&lt;/p&gt;
+&lt;p&gt;It’s a judge, not a rule engine, and that distinction is everything. “Never mock the database in
+integration tests” isn’t a pattern you can match with a regex. It’s a meaning. You can only check
+it by understanding what the change does and what the rule intends, which is exactly the reading
+we used to need a person for. The honest cost is that a judge produces suspicions, not verdicts.
+It can be wrong. We designed around that instead of pretending otherwise.&lt;/p&gt;
 &lt;h2 id=&quot;why-it-doesnt-fail-your-build&quot;&gt;Why it doesn’t fail your build&lt;/h2&gt;
-&lt;p&gt;If you’re in the “read the code” camp, the thing you’re rightly afraid of is a noisy automated
-check that blocks work on a bad guess. We share that fear, so the linter ships advisory only.
-It never fails a build. It leaves a note and a human decides. A probabilistic check that can
-break CI is just a probabilistic build-breaker, and it would teach everyone to ignore it inside
-a week.&lt;/p&gt;
-&lt;p&gt;Cost gets the same restraint. A large PR against a full knowledge base is thousands of
-change-and-rule pairs, and calling a model on each one would be slow and expensive. Almost all
-of those pairs are unrelated, so we throw them out for free first, with a local embedding pass,
-and only spend a model call on the handful that actually look like they might conflict. The
-model is the last stage of a funnel, not the first.&lt;/p&gt;
-&lt;p&gt;There’s an enforcement ladder above advisory, for teams that watch the false-positive rate on
-their own repo and decide a particular rule is worth gating on, with an override path for the
-author who knows better. But the default is deliberately the humble end of that ladder. The
-system earns trust before it’s given teeth.&lt;/p&gt;
+&lt;p&gt;If you’re in the “read every line” camp, the thing you’re rightly afraid of is a noisy automated
+check that blocks work on a bad guess. We share that fear, so the linter ships advisory only. It
+never fails a build. It leaves a note and a human decides. A probabilistic check that can break
+CI is just a probabilistic build-breaker, and it would teach everyone to ignore it inside a week.&lt;/p&gt;
+&lt;p&gt;And if you’re in the “this is soul-crushing” camp, look at what the linter takes off you. It is
+not the interesting part of review. It is the dull part: checking every change against every
+decision the team has made, which is the work no human does well and no human enjoys. Give that
+to the machine and what’s left is the judgment, the taste, whether this is even the right change.
+The part that was worth doing in the first place.&lt;/p&gt;
+&lt;p&gt;Cost gets the same restraint. A large PR against a full knowledge base is thousands of change-
+and-rule pairs, and calling a model on each one would be slow and expensive. Almost all of those
+pairs are unrelated, so we drop them for free first with a local embedding pass, and spend a
+model call only on the few that look like they might conflict. The model is the last stage of the
+check, not the first.&lt;/p&gt;
+&lt;p&gt;There’s a ladder above advisory, for teams that watch how often the check is wrong on their own
+repo and decide a particular rule is worth blocking on, with a way for an author who knows better
+to override it. But the default sits at the bottom of that ladder on purpose. The system earns
+trust before it can block anything.&lt;/p&gt;
 &lt;h2 id=&quot;the-narrow-claim&quot;&gt;The narrow claim&lt;/h2&gt;
-&lt;p&gt;We’re not claiming the reviewer goes away. The judgment part of review, the part the “we read
-the code” camp is protecting, is not what this replaces, and we’d be suspicious of anyone
-selling that. What we’re claiming is narrower and, we think, harder to argue with: no human
-reviewer can hold every decision the team has ever made in their head and recall the right one
-at the right moment. That specific job, remembering, is one a system does better, and handing
-it over doesn’t cost you any of the judgment you were worried about losing. It gives the
-reviewer back the attention to spend on the parts that actually need a person.&lt;/p&gt;
-&lt;p&gt;If you’re skeptical of automating review, this is the version we’d ask you to try. Not a bot
-that approves your PRs. A memory that speaks up when you’re about to undo a decision you’d
-forgotten you made, and otherwise stays quiet.&lt;/p&gt;
-&lt;p&gt;Because a check that reads every diff against your team’s rules is a lot to take on faith, the
+&lt;p&gt;I’m not claiming the reviewer goes away. The judgment part of review, the part the “read every
+line” camp is protecting, is not what this replaces, and I’d distrust anyone selling that. The
+claim is narrower and, I think, harder to argue with. No reviewer can hold every decision the team
+has made in their head and recall the right one at the right moment. That one job, remembering, is
+one a system does better, and handing it over costs you none of the judgment you were afraid to
+lose. It gives you back the attention for the parts that need a person, and it brings back, a
+little, what used to pass between people when they reviewed each other’s work.&lt;/p&gt;
+&lt;p&gt;That’s the version of automated review I’d ask a doubter to try. Not a bot that approves your PRs.
+A memory that speaks up when you’re about to undo a decision you forgot you made, and otherwise
+stays quiet.&lt;/p&gt;
+&lt;p&gt;Because a check that reads every diff against your team’s rules is a lot to take on trust, the
 code that decides what it flags is open to read. Lore is &lt;a href=&quot;https://fair.io&quot;&gt;Fair Source&lt;/a&gt;
-(FSL-1.1-Apache-2.0), and it turns into Apache 2.0 on a timer. A rule you can watch enforce
+(FSL-1.1-Apache-2.0), and it becomes Apache 2.0 after a set time. A rule you can watch enforce
 itself is worth more than one you have to remember.&lt;/p&gt;</content:encoded><dc:creator>Lore Team</dc:creator><category>knowledge</category><category>code review</category><category>ci</category><category>agents</category></item><item><title>Distill the knowledge, not the model</title><link>https://withlore.ai/blog/distill-your-own-knowledge/</link><guid isPermaLink="true">https://withlore.ai/blog/distill-your-own-knowledge/</guid><description>Satya Nadella named the Reverse Information Paradox. His fix over-solves it: your learning can stay yours in token space, without training a model.</description><pubDate>Mon, 13 Jul 2026 00:00:00 GMT</pubDate><content:encoded>&lt;h2 id=&quot;the-diagnosis-is-right&quot;&gt;The diagnosis is right&lt;/h2&gt;
 &lt;p&gt;Satya Nadella &lt;a href=&quot;https://x.com/satyanadella/status/2076323181154230284&quot;&gt;posted this week&lt;/a&gt; about
 what he calls the Reverse Information Paradox, and if you build with these models you already
