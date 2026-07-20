@@ -1,0 +1,84 @@
+<!DOCTYPE html><html lang="en"> <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Let your past decisions review the code | Lore</title><meta name="description" content="&quot;We read the code&quot; and &quot;automate the review&quot; are usually framed as opposites. The part worth automating isn't judgment. It's memory: catching the change that contradicts a decision nobody on the PR happens to recall."><!-- Open Graph --><meta property="og:title" content="Let your past decisions review the code | Lore"><meta property="og:description" content="&quot;We read the code&quot; and &quot;automate the review&quot; are usually framed as opposites. The part worth automating isn't judgment. It's memory: catching the change that contradicts a decision nobody on the PR happens to recall."><meta property="og:image" content="https://withlore.ai/_preview/pr-1412/og-image-c43f89de.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta property="og:image:alt" content="Lore.AI — Shared Context for AI Agents"><meta property="og:url" content="https://withlore.ai/_preview/pr-1412/blog/review-with-memory/"><meta property="og:type" content="article"><meta property="og:site_name" content="Lore.AI"><!-- Twitter Card --><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="Let your past decisions review the code | Lore"><meta name="twitter:description" content="&quot;We read the code&quot; and &quot;automate the review&quot; are usually framed as opposites. The part worth automating isn't judgment. It's memory: catching the change that contradicts a decision nobody on the PR happens to recall."><meta name="twitter:image" content="https://withlore.ai/_preview/pr-1412/og-image-c43f89de.png"><meta name="twitter:site" content="@withLoreAI"><!-- RSS feed autodiscovery --><link rel="alternate" type="application/rss+xml" title="Lore Blog" href="https://withlore.ai/_preview/pr-1412/rss.xml"><!--
+  standard.site publication discovery hint. This is a hint only; the
+  authoritative check is the /.well-known/site.standard.publication endpoint.
+--><link rel="site.standard.publication" href="at://did:plc:mnccz4sthqjuyugmzlfacnv7/site.standard.publication/self"><link rel="site.standard.document" href="at://did:plc:mnccz4sthqjuyugmzlfacnv7/site.standard.document/review-with-memory"><link rel="icon" type="image/svg+xml" href="/_preview/pr-1412/favicon.svg"><link rel="icon" type="image/png" sizes="32x32" href="/_preview/pr-1412/favicon-32.png"><link rel="apple-touch-icon" sizes="180x180" href="/_preview/pr-1412/apple-touch-icon.png"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;1,400;1,500&family=DM+Sans:wght@200;300;400;500;700&display=swap" rel="stylesheet"><link rel="stylesheet" href="/_preview/pr-1412/theme.css"><style>.blog-body{min-height:100svh;background:var(--bg);cursor:auto}.blog-body:after{z-index:0}.blog-nav{position:sticky;top:0;z-index:20;display:flex;align-items:center;justify-content:space-between;gap:2rem;padding:.6rem 3rem;background:var(--nav-bg);color:var(--inverse-text)}.blog-brand img{display:block;height:64px;width:auto}.blog-nav nav{display:flex;align-items:center;gap:1.5rem;font-size:.9rem}.blog-hero,.blog-list,.blog-post{width:min(980px,calc(100% - 2rem));margin:0 auto}.blog-hero{padding:7rem 0 4rem}.blog-hero h1,.blog-post h1{font-family:var(--serif);font-weight:400;color:var(--heading)}.blog-hero h1{max-width:760px;font-size:clamp(2.6rem,6vw,5rem);line-height:1.05}.blog-hero p:not(.eyebrow),.blog-card p,.blog-post header p{max-width:68ch;color:var(--text-muted)}.blog-list{display:grid;gap:1px;padding-bottom:6rem;border:1px solid var(--border);background:var(--border)}.blog-card{background:var(--surface);padding:2rem}.blog-card time,.blog-post time,.blog-back{color:var(--eyebrow);font-size:.78rem;letter-spacing:.1em;text-transform:uppercase}.blog-card h2{margin:.7rem 0 .6rem;font-family:var(--serif);font-size:1.8rem;font-weight:400}.blog-card ul{display:flex;flex-wrap:wrap;gap:.5rem;margin-top:1rem;list-style:none}.blog-card li{border:1px solid var(--border);border-radius:3px;padding:.15rem .5rem;color:var(--link);font-size:.78rem}.blog-post{width:min(720px,calc(100% - 3rem));padding:5rem 0 7rem}.blog-post header{margin:2rem 0 3.5rem}.blog-post h1{font-size:clamp(2.4rem,5vw,4rem);line-height:1.08}.blog-post .blog-subtitle{margin:.8rem 0 0;max-width:none;font-family:var(--serif);font-style:italic;font-weight:400;font-size:clamp(1.3rem,3vw,1.9rem);line-height:1.2;color:var(--heading-accent)}.blog-post time{display:block;margin:1.6rem 0 .5rem}.blog-post header p:not(.blog-subtitle){margin:0;font-size:1.1rem;line-height:1.6}.blog-prose{max-width:none}.blog-prose p,.blog-prose li{color:var(--text);font-size:1.05rem;line-height:1.75}.blog-prose p,.blog-prose ul,.blog-prose ol,.blog-prose blockquote,.blog-prose pre,.blog-prose table{margin:0 0 1.4rem}.blog-prose>:first-child{margin-top:0}.blog-prose h2{margin:2.8rem 0 1rem;font-family:var(--serif);font-weight:500;font-size:1.75rem;line-height:1.2;color:var(--heading)}.blog-prose h3{margin:2.2rem 0 .8rem;font-family:var(--serif);font-weight:500;font-size:1.3rem;line-height:1.25;color:var(--heading)}.blog-prose ul,.blog-prose ol{padding-left:1.3rem}.blog-prose li{margin-bottom:.5rem}.blog-prose li:last-child{margin-bottom:0}.blog-prose a{color:var(--emphasis);text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:2px}.blog-prose a:hover{color:var(--link-hover)}.blog-prose :not(pre)>code{padding:.12em .35em;border-radius:3px;background:var(--bg-alt);font-size:.9em}.blog-prose blockquote{padding:.4rem 0 .4rem 1.3rem;border-left:3px solid var(--eyebrow);color:var(--emphasis);font-family:var(--serif);font-style:italic;font-size:1.45rem;line-height:1.3}.blog-prose blockquote p{margin:0}.blog-prose table{width:100%;border-collapse:collapse;font-size:1rem}.blog-prose th,.blog-prose td{padding:.7rem .9rem;border:1px solid var(--border);text-align:left;vertical-align:top;line-height:1.55}.blog-prose thead th{background:var(--surface-alt);color:var(--heading);font-weight:600}.blog-prose tbody tr:nth-child(2n) td{background:var(--surface-alt)}.blog-prose pre{overflow-x:auto;border-radius:4px;padding:1rem;background:var(--inverse-bg);color:var(--inverse-text-dim)}@media(max-width:780px){.blog-nav{align-items:flex-start;flex-direction:column;padding:.8rem 1rem 1rem}.blog-nav nav{flex-wrap:wrap}}
+</style><script type="module" src="/_preview/pr-1412/_astro/page.B_tncCx8.js"></script></head> <body class="blog-body"> <header class="blog-nav"> <a href="/_preview/pr-1412/" class="logo" data-theme="dark" aria-label="Lore.AI — home">   <img src="/_preview/pr-1412/_astro/loreai-dark.BoECdKok.svg" class="logo-img" alt="" width="48" height="48" style="height: 48px; width: 48px;"> <span class="logo-text">Lore<span class="logo-dot">.</span>AI</span> </a> <nav aria-label="Primary navigation"> <a href="/_preview/pr-1412/docs/">Docs</a> <a href="/_preview/pr-1412/blog/">Blog</a> <a href="/_preview/pr-1412/different/">Why Lore</a> <a href="/_preview/pr-1412/rss.xml">RSS</a> <a href="https://github.com/byk/loreai" target="_blank" rel="noopener noreferrer">GitHub</a> </nav> </header> <main>  <article class="blog-post"> <a class="blog-back" href="/_preview/pr-1412/blog/">Back to blog</a> <header> <p class="eyebrow">Lore Team</p> <h1>Let your past decisions review the code</h1> <p class="blog-subtitle">The reviewer can&#39;t remember every rule the team ever agreed on. Something should.</p> <time datetime="2026-07-20T00:00:00.000Z"> July 20, 2026 </time> <p>&quot;We read the code&quot; and &quot;automate the review&quot; are usually framed as opposites. The part worth automating isn&#39;t judgment. It&#39;s memory: catching the change that contradicts a decision nobody on the PR happens to recall.</p> </header> <div class="blog-prose"> <p>There’s a real argument happening right now about what review is for. One camp says the point
+of writing code with agents is that a human still reads every line before it ships. The other
+says manual review is a bottleneck we should be automating away. We land on the automation
+side, but we think the way the debate is usually drawn misses the part that actually matters.</p>
+<p>Because most of what “read the code” is defending is worth defending. Taste, judgment, whether
+the change is the right change at all, whether it fits where the codebase is going. A machine
+is not about to take that over, and we are not trying to. What we want to talk about is the
+part of review that has nothing to do with judgment and everything to do with memory, because
+that part is where humans are weakest and where a system can genuinely help.</p>
+<h2 id="the-decision-nobody-on-the-pr-remembers">The decision nobody on the PR remembers</h2>
+<p>Here is the failure we keep seeing. Six months ago the team decided, for good reasons, not to
+do a certain thing. Maybe you don’t mock the database in integration tests, because the last
+time someone did it hid a migration bug for a week. Maybe deploys only ever go out from the
+release branch. The decision was made, it was sound, and everyone moved on.</p>
+<p>Then a pull request quietly reintroduces exactly that thing. Not out of carelessness. The
+author simply wasn’t in the room when the decision was made, or was, and it was a year ago.
+The one reviewer who would catch it in a heartbeat isn’t on this PR. So it merges, and the
+lesson gets relearned the expensive way.</p>
+<p>Notice what kind of failure this is. Nobody exercised bad judgment. The change looks
+reasonable in isolation. What was missing was not a smarter reviewer. It was a reviewer who
+happened to remember one specific decision at the exact moment it was being contradicted. That
+is not a judgment problem. It is a recall problem wearing a review problem’s clothes.</p>
+<h2 id="you-already-wrote-the-rule-down">You already wrote the rule down</h2>
+<p>If your team uses Lore, that decision is not lost. It’s sitting in
+<a href="/_preview/pr-1412/docs/team-memory/"><code>.lore.md</code></a>, a version-controlled file of the decisions, patterns, and
+gotchas the team has accumulated, exported as plain Markdown and reviewed in pull requests
+like any other file. We’ve written before about
+<a href="/_preview/pr-1412/blog/distill-your-own-knowledge/">why that knowledge lives in text</a> rather than baked into a
+model: text is something you can read, diff, carry to the next model, and correct a line at a
+time.</p>
+<p>But a written rule that only a human can act on has the same weakness as the human. It only
+helps if someone reads it at the right moment. The file knows the team decided not to mock the
+database. The question is whether that knowledge can do anything on its own, or whether it just
+waits, again, for a person to remember it’s there.</p>
+<h2 id="memory-that-can-intervene">Memory that can intervene</h2>
+<p>This is the shift we care about. A memory store that only answers when asked is passive. It
+recalls; it never intervenes. The more useful thing is knowledge that shows up on its own at
+the moment it’s relevant, which for a team decision is the moment a change is about to
+contradict it.</p>
+<p>So we built a check that reads the diff against the rules. On every pull request, Lore’s
+<a href="/_preview/pr-1412/docs/guides/semantic-linter/">semantic linter</a> takes the changes and the invariants from
+<code>.lore.md</code> and asks, for the pairs that look related, a narrow question: does this change
+contradict this documented decision? When it thinks the answer is yes, it says so, as an
+annotation on the PR, next to the line.</p>
+<p>It is a judge, not a rule engine, and that distinction is the whole point. “Never mock the
+database in integration tests” is not a pattern you can match with a regex. It’s a meaning. You
+can only check it by understanding what the change does and what the rule intends, which is
+exactly the kind of reading we used to need a person for. The tradeoff is that a judge produces
+suspicions, not verdicts. It can be wrong. We designed around that rather than pretending
+otherwise.</p>
+<h2 id="why-it-doesnt-fail-your-build">Why it doesn’t fail your build</h2>
+<p>If you’re in the “read the code” camp, the thing you’re rightly afraid of is a noisy automated
+check that blocks work on a bad guess. We share that fear, so the linter ships advisory only.
+It never fails a build. It leaves a note and a human decides. A probabilistic check that can
+break CI is just a probabilistic build-breaker, and it would teach everyone to ignore it inside
+a week.</p>
+<p>Cost gets the same restraint. A large PR against a full knowledge base is thousands of
+change-and-rule pairs, and calling a model on each one would be slow and expensive. Almost all
+of those pairs are unrelated, so we throw them out for free first, with a local embedding pass,
+and only spend a model call on the handful that actually look like they might conflict. The
+model is the last stage of a funnel, not the first.</p>
+<p>There’s an enforcement ladder above advisory, for teams that watch the false-positive rate on
+their own repo and decide a particular rule is worth gating on, with an override path for the
+author who knows better. But the default is deliberately the humble end of that ladder. The
+system earns trust before it’s given teeth.</p>
+<h2 id="the-narrow-claim">The narrow claim</h2>
+<p>We’re not claiming the reviewer goes away. The judgment part of review, the part the “we read
+the code” camp is protecting, is not what this replaces, and we’d be suspicious of anyone
+selling that. What we’re claiming is narrower and, we think, harder to argue with: no human
+reviewer can hold every decision the team has ever made in their head and recall the right one
+at the right moment. That specific job, remembering, is one a system does better, and handing
+it over doesn’t cost you any of the judgment you were worried about losing. It gives the
+reviewer back the attention to spend on the parts that actually need a person.</p>
+<p>If you’re skeptical of automating review, this is the version we’d ask you to try. Not a bot
+that approves your PRs. A memory that speaks up when you’re about to undo a decision you’d
+forgotten you made, and otherwise stays quiet.</p>
+<p>Because a check that reads every diff against your team’s rules is a lot to take on faith, the
+code that decides what it flags is open to read. Lore is <a href="https://fair.io">Fair Source</a>
+(FSL-1.1-Apache-2.0), and it turns into Apache 2.0 on a timer. A rule you can watch enforce
+itself is worth more than one you have to remember.</p> </div> </article>  </main> <footer> <div class="foot-bottom"> <small>&copy; 2026 Lore.AI</small> </div> </footer> </body></html>
