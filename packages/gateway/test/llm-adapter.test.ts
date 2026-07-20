@@ -45,6 +45,7 @@ import { recordWorkerFailure, markWorkerPaused } from "../src/worker-health";
 import {
   markWorkerIncapable,
   markFreeModelsDataBlocked,
+  _resetForTest as _resetWorkerHealthForTest,
 } from "../src/worker-health";
 import { captureSessionHeaders, captureBillingPrefix } from "../src/cch";
 import { _setTestVertexTokenProvider } from "../src/vertex-auth";
@@ -2555,5 +2556,369 @@ describe("worker thinking disabled for Anthropic Claude models", () => {
     expect(bodyOf(1)).not.toHaveProperty("thinking"); // strip did happen
     // But the model is NOT learned — the retry never confirmed the cure.
     expect(isThinkingUnsupportedModel(model)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Worker empty-response retry on budget truncation (finish_reason: "length")
+//
+// REGRESSION: after PR #1407 made worker selection stay inside the session
+// model's vendor lineage, an OpenRouter Claude session resolves its worker to
+// a same-vendor REASONING model (e.g. anthropic/claude-sonnet-5). Routed over
+// the OpenAI protocol, that model spends the entire max_completion_tokens
+// budget on hidden reasoning and returns an EMPTY completion with
+// finish_reason:"length" — previously miscounted as a no-response failure that
+// degraded the whole session. The adapter now retries ONCE with the budget
+// multiplied (clamped to the model's output limit).
+// ---------------------------------------------------------------------------
+describe("worker empty-response retry on budget truncation (finish_reason: length)", () => {
+  const mockFetch = vi.mocked(upstreamFetch);
+  const UPSTREAMS = {
+    anthropic: "https://api.anthropic.com",
+    openai: "https://api.openai.com",
+    openrouter: "https://openrouter.ai/api",
+  };
+
+  beforeEach(() => {
+    mockFetch.mockReset();
+    _resetWorkerHealthForTest();
+    vi.mocked(recordWorkerFailure).mockClear();
+    vi.mocked(markWorkerPaused).mockClear();
+    vi.mocked(markWorkerIncapable).mockClear();
+    vi.mocked(markFreeModelsDataBlocked).mockClear();
+    // A reasoning model with a large output limit so the retry ceiling is the
+    // WORKER_LENGTH_RETRY_CAP (64000), not the model limit.
+    _setModelDataForTest({
+      "anthropic/claude-sonnet-5": {
+        id: "anthropic/claude-sonnet-5",
+        cost: { input: 3, output: 15 },
+        limit: { context: 200_000, output: 64_000 },
+      },
+    });
+  });
+  afterEach(() => {
+    mockFetch.mockReset();
+    clearAllCosts();
+    resetBackgroundLimiter();
+    clearModelDataCache();
+    _resetWorkerHealthForTest();
+    vi.mocked(recordWorkerFailure).mockClear();
+    vi.mocked(markWorkerPaused).mockClear();
+    vi.mocked(markWorkerIncapable).mockClear();
+    vi.mocked(markFreeModelsDataBlocked).mockClear();
+  });
+
+  function lengthTruncated() {
+    return new Response(
+      JSON.stringify({
+        id: "gen-x",
+        object: "chat.completion",
+        model: "anthropic/claude-sonnet-5",
+        choices: [
+          {
+            index: 0,
+            finish_reason: "length",
+            native_finish_reason: "max_tokens",
+            message: { role: "assistant", content: "" },
+          },
+        ],
+        usage: { prompt_tokens: 100, completion_tokens: 16384 },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }
+  function openAISuccess(text: string) {
+    return new Response(
+      JSON.stringify({
+        id: "gen-ok",
+        object: "chat.completion",
+        model: "anthropic/claude-sonnet-5",
+        choices: [
+          {
+            index: 0,
+            finish_reason: "stop",
+            message: { role: "assistant", content: text },
+          },
+        ],
+        usage: { prompt_tokens: 100, completion_tokens: 42 },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }
+  function client() {
+    return createGatewayLLMClient(
+      UPSTREAMS,
+      () => ({ scheme: "bearer", value: "sk-or-test" }),
+      { providerID: "openrouter", modelID: "anthropic/claude-sonnet-5" },
+    );
+  }
+  function bodyOf(callIndex: number): Record<string, unknown> | undefined {
+    const raw = mockFetch.mock.calls[callIndex]?.[1]?.body;
+    if (typeof raw !== "string") return undefined;
+    return JSON.parse(raw) as Record<string, unknown>;
+  }
+  // OpenAI SSE stream that truncates on the output budget with EMPTY content —
+  // the finish reason only survives on the accumulated stream (stopReason), not
+  // in a JSON body. content-type is text/event-stream so looksLikeSSE trips.
+  function lengthTruncatedSSE() {
+    const body = [
+      'data: {"id":"gen-sse","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}',
+      "",
+      'data: {"id":"gen-sse","choices":[{"index":0,"delta":{},"finish_reason":"length"}],"usage":{"prompt_tokens":100,"completion_tokens":16384}}',
+      "",
+      "data: [DONE]",
+      "",
+    ].join("\n");
+    return new Response(body, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    });
+  }
+  // JSON body whose ONLY truncation signal is the aggregator `native_finish_reason`
+  // (OpenRouter shape): `finish_reason` is null, `native_finish_reason` is the
+  // upstream `MAX_TOKENS` (note casing). extractFinishReason must read it.
+  function lengthTruncatedNativeOnly() {
+    return new Response(
+      JSON.stringify({
+        id: "gen-native",
+        object: "chat.completion",
+        model: "anthropic/claude-sonnet-5",
+        choices: [
+          {
+            index: 0,
+            finish_reason: null,
+            native_finish_reason: "MAX_TOKENS",
+            message: { role: "assistant", content: "" },
+          },
+        ],
+        usage: { prompt_tokens: 100, completion_tokens: 16384 },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }
+
+  test("retries ONCE with a raised budget and recovers when the reasoning model then emits text", async () => {
+    mockFetch
+      .mockResolvedValueOnce(lengthTruncated())
+      .mockResolvedValueOnce(openAISuccess("distilled summary"));
+
+    const text = await client().prompt("system", "user", {
+      sessionID: "sess-length-recover",
+      workerID: "lore-distill",
+      protocol: "openai",
+      upstreamProviderID: "openrouter",
+      upstreamUrl: "https://openrouter.ai/api",
+    });
+
+    // Mutation: remove the length-retry block → only 1 call, text is null,
+    // recordWorkerFailure('no-response') fires → RED.
+    expect(text).toBe("distilled summary");
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+
+    // First attempt used the default budget; the retry raised it (4× = 65536,
+    // clamped to the model's 64000 output limit).
+    expect(bodyOf(0)?.max_completion_tokens).toBe(16384);
+    expect(bodyOf(1)?.max_completion_tokens).toBe(64000);
+
+    // A successful retry is NOT a failure.
+    expect(vi.mocked(recordWorkerFailure)).not.toHaveBeenCalled();
+  });
+
+  test("retries at most ONCE — a still-truncated retry falls through to no-response, not an infinite loop", async () => {
+    mockFetch.mockImplementation(async () => lengthTruncated());
+
+    const text = await client().prompt("system", "user", {
+      sessionID: "sess-length-persist",
+      workerID: "lore-distill",
+      protocol: "openai",
+      upstreamProviderID: "openrouter",
+      upstreamUrl: "https://openrouter.ai/api",
+    });
+
+    expect(text).toBeNull();
+    // Exactly one retry: original + one bumped attempt.
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(bodyOf(1)?.max_completion_tokens).toBe(64000);
+    // A budget truncation is retryable, not a capability signal, so it is
+    // recorded as no-response (never worker-incapable).
+    expect(vi.mocked(recordWorkerFailure)).toHaveBeenCalledWith(
+      "sess-length-persist",
+      "lore-distill",
+      "no-response",
+    );
+  });
+
+  test("a normal empty completion with finish_reason:'stop' is NOT budget-retried (capability path unchanged)", async () => {
+    const emptyStop = () =>
+      new Response(
+        JSON.stringify({
+          id: "gen-empty",
+          object: "chat.completion",
+          model: "anthropic/claude-sonnet-5",
+          choices: [
+            {
+              index: 0,
+              finish_reason: "stop",
+              message: { role: "assistant", content: "" },
+            },
+          ],
+          usage: { prompt_tokens: 100, completion_tokens: 0 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    mockFetch.mockImplementation(async () => emptyStop());
+
+    const text = await client().prompt("system", "user", {
+      sessionID: "sess-empty-stop",
+      workerID: "lore-distill",
+      protocol: "openai",
+      upstreamProviderID: "openrouter",
+      upstreamUrl: "https://openrouter.ai/api",
+    });
+
+    expect(text).toBeNull();
+    // No budget retry for a genuine 'stop' empty — single attempt.
+    // Mutation: broaden isLengthTruncation to accept 'stop' → 2 calls → RED.
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  test("OpenAI worker builder pre-sizes max_completion_tokens with reasoning headroom when effort is set", async () => {
+    // Builder-alignment half of the fix: the OpenAI-protocol worker request must
+    // mirror the native Anthropic/Vertex builders and raise the output budget by
+    // the reasoning token budget + headroom when reasoning is active, so a
+    // reasoning model gets room for the answer AFTER thinking on the FIRST
+    // attempt (not only via the length-retry). effort=high → thinking budget
+    // 16384 + HEADROOM 8192 = 24576 > the 16384 default.
+    // Mutation: drop the effectiveMaxTokens headroom in buildOpenAIWorkerRequest
+    // → first call sends 16384 → RED.
+    mockFetch.mockResolvedValueOnce(openAISuccess("ok"));
+
+    await client().prompt("system", "user", {
+      sessionID: "sess-effort-headroom",
+      workerID: "lore-distill",
+      protocol: "openai",
+      upstreamProviderID: "openrouter",
+      upstreamUrl: "https://openrouter.ai/api",
+      reasoningEffort: "high",
+    });
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(bodyOf(0)?.max_completion_tokens).toBe(24576);
+    expect(bodyOf(0)?.reasoning_effort).toBe("high");
+  });
+
+  test("OpenAI worker builder leaves the default budget unchanged when no reasoning effort is set", async () => {
+    // Non-reasoning workers must not pay inflated budgets, and reasoning_effort
+    // must be omitted. The budget assertion (16384) is guaranteed by the default
+    // exceeding the headroom floor (8192); the load-bearing assertion here is
+    // that reasoning_effort is NOT sent when effort is unset (openAIReasoningEffort
+    // → null). Mutation: unconditionally emit reasoning_effort → RED.
+    mockFetch.mockResolvedValueOnce(openAISuccess("ok"));
+
+    await client().prompt("system", "user", {
+      sessionID: "sess-no-effort",
+      workerID: "lore-distill",
+      protocol: "openai",
+      upstreamProviderID: "openrouter",
+      upstreamUrl: "https://openrouter.ai/api",
+    });
+
+    expect(bodyOf(0)?.max_completion_tokens).toBe(16384);
+    expect(bodyOf(0)).not.toHaveProperty("reasoning_effort");
+  });
+
+  test("does NOT length-retry when the model's output limit is at or below the current budget (no shrink, no wasted call)", async () => {
+    // Guards the `maxTokens < workerLengthRetryCeiling` clause. A model whose
+    // output limit (8192) is below the default budget (16384) can never be given
+    // MORE room — retrying would either shrink the budget or waste a call. The
+    // guard must skip the retry entirely.
+    // Mutation: delete the `maxTokens < ceiling` clause → the retry fires and
+    // rebuilds with a NON-larger budget (a shrink to min(16384*4, 8192)=8192) →
+    // 2 calls → RED.
+    _setModelDataForTest({
+      "anthropic/claude-mini-8k": {
+        id: "anthropic/claude-mini-8k",
+        cost: { input: 1, output: 5 },
+        limit: { context: 100_000, output: 8_192 },
+      },
+    });
+    mockFetch.mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            id: "gen-small",
+            object: "chat.completion",
+            model: "anthropic/claude-mini-8k",
+            choices: [
+              {
+                index: 0,
+                finish_reason: "length",
+                message: { role: "assistant", content: "" },
+              },
+            ],
+            usage: { prompt_tokens: 100, completion_tokens: 8192 },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+
+    const text = await createGatewayLLMClient(
+      UPSTREAMS,
+      () => ({ scheme: "bearer", value: "sk-or-test" }),
+      { providerID: "openrouter", modelID: "anthropic/claude-mini-8k" },
+    ).prompt("system", "user", {
+      sessionID: "sess-small-limit",
+      workerID: "lore-distill",
+      protocol: "openai",
+      upstreamProviderID: "openrouter",
+      upstreamUrl: "https://openrouter.ai/api",
+    });
+
+    expect(text).toBeNull();
+    // Guard fired: single attempt, no retry.
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  test("length-retry is reachable for an SSE (streamed) truncation — stopReason from the accumulated stream (Seer #1413)", async () => {
+    mockFetch
+      .mockResolvedValueOnce(lengthTruncatedSSE())
+      .mockResolvedValueOnce(openAISuccess("streamed then recovered"));
+
+    const text = await client().prompt("system", "user", {
+      sessionID: "sess-sse-length",
+      workerID: "lore-distill",
+      protocol: "openai",
+      upstreamProviderID: "openrouter",
+      upstreamUrl: "https://openrouter.ai/api",
+    });
+
+    // For SSE, rawData is `{}`; the retry is only reachable via the accumulated
+    // GatewayResponse.stopReason (length → max_tokens). Mutation: use
+    // extractFinishReason(rawData) instead of sseStopReason → no retry, null,
+    // no-response recorded → RED.
+    expect(text).toBe("streamed then recovered");
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(bodyOf(1)?.max_completion_tokens).toBe(64000);
+  });
+
+  test("length-retry fires when the ONLY truncation signal is native_finish_reason (Seer #1413)", async () => {
+    mockFetch
+      .mockResolvedValueOnce(lengthTruncatedNativeOnly())
+      .mockResolvedValueOnce(openAISuccess("recovered via native reason"));
+
+    const text = await client().prompt("system", "user", {
+      sessionID: "sess-native-length",
+      workerID: "lore-distill",
+      protocol: "openai",
+      upstreamProviderID: "openrouter",
+      upstreamUrl: "https://openrouter.ai/api",
+    });
+
+    // finish_reason is null; the truncation is only in native_finish_reason
+    // ("MAX_TOKENS"). Mutation: drop the native_finish_reason read in
+    // extractFinishReason, or drop the toLowerCase in isLengthTruncation → no
+    // retry → RED.
+    expect(text).toBe("recovered via native reason");
+    expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 });
