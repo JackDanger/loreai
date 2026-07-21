@@ -77,7 +77,8 @@ welcome to watch it.&lt;/p&gt;
 exists in a form that asks no one’s permission: token-space, local, model-agnostic, running
 today. In consuming intelligence, you are creating intelligence. That’s his line, and he’s
 right about it. The only question is who keeps it, and you can answer that one yourself this
-afternoon.&lt;/p&gt;</content:encoded><dc:creator>Lore Team</dc:creator><category>memory</category><category>context management</category><category>agents</category></item><item><title>How Lore remembers, forgets, and changes its mind</title><link>https://withlore.ai/blog/how-lore-remembers-and-forgets/</link><guid isPermaLink="true">https://withlore.ai/blog/how-lore-remembers-and-forgets/</guid><description>Most memory tools now ship a set of principles for how an agent should manage its context. Lore&apos;s principles work differently, because the layer enforces them instead of asking the agent to. Here are the rules Lore runs on.</description><pubDate>Thu, 02 Jul 2026 00:00:00 GMT</pubDate><content:encoded>&lt;p&gt;Everywhere you look, agents are being taught to fix themselves. Self-healing loops,
+afternoon.&lt;/p&gt;
+</content:encoded><dc:creator>Lore Team</dc:creator><category>memory</category><category>context management</category><category>agents</category></item><item><title>How Lore remembers, forgets, and changes its mind</title><link>https://withlore.ai/blog/how-lore-remembers-and-forgets/</link><guid isPermaLink="true">https://withlore.ai/blog/how-lore-remembers-and-forgets/</guid><description>Most memory tools now ship a set of principles for how an agent should manage its context. Lore&apos;s principles work differently, because the layer enforces them instead of asking the agent to. Here are the rules Lore runs on.</description><pubDate>Thu, 02 Jul 2026 00:00:00 GMT</pubDate><content:encoded>&lt;p&gt;Everywhere you look, agents are being taught to fix themselves. Self-healing loops,
 self-improving memory, a model that reads back its own transcript, rewrites its own
 instructions, and prunes whatever it decides has gone stale. There is real energy here, and
 some of it genuinely works.&lt;/p&gt;
@@ -171,7 +172,8 @@ is one you never have to hope about.&lt;/p&gt;
 not a description you take on faith. Lore is &lt;a href=&quot;https://fair.io&quot;&gt;Fair Source&lt;/a&gt;
 (FSL-1.1-Apache-2.0), so the code that decides what your agent remembers and forgets is right
 there for you to read, and it turns into Apache 2.0 on a timer. Principles you can enforce are
-better than principles you have to believe.&lt;/p&gt;</content:encoded><dc:creator>Lore Team</dc:creator><category>memory</category><category>principles</category><category>agents</category></item><item><title>Why memory is not enough</title><link>https://withlore.ai/blog/why-memory-is-not-enough/</link><guid isPermaLink="true">https://withlore.ai/blog/why-memory-is-not-enough/</guid><description>A long-term memory store remembers what you said last week. It can&apos;t manage the context window that&apos;s overflowing right now. Those are two different problems, and only one of them is getting solved.</description><pubDate>Fri, 26 Jun 2026 00:00:00 GMT</pubDate><content:encoded>&lt;p&gt;Ask anyone building agents what “memory” means and you’ll get the same answer: a place to
+better than principles you have to believe.&lt;/p&gt;
+</content:encoded><dc:creator>Lore Team</dc:creator><category>memory</category><category>principles</category><category>agents</category></item><item><title>Why memory is not enough</title><link>https://withlore.ai/blog/why-memory-is-not-enough/</link><guid isPermaLink="true">https://withlore.ai/blog/why-memory-is-not-enough/</guid><description>A long-term memory store remembers what you said last week. It can&apos;t manage the context window that&apos;s overflowing right now. Those are two different problems, and only one of them is getting solved.</description><pubDate>Fri, 26 Jun 2026 00:00:00 GMT</pubDate><content:encoded>&lt;p&gt;Ask anyone building agents what “memory” means and you’ll get the same answer: a place to
 store facts and decisions so the agent can pull them back later. A vector DB, a knowledge
 graph, a folder of notes, take your pick. It remembers what you discussed last week, and
 there are good tools that do this well now.&lt;/p&gt;
@@ -192,24 +194,24 @@ quite remember its own name. We all quietly accepted this for something that hap
 session, often more than once: the most predictable failure in agentic coding, answered by a
 guillotine. So why has nobody built the thing that keeps up?&lt;/p&gt;
 &lt;h2 id=&quot;two-problems-hiding-behind-one-word&quot;&gt;Two problems hiding behind one word&lt;/h2&gt;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-&lt;table&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;What you say&lt;/th&gt;&lt;th&gt;What it actually needs&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td&gt;”What did we decide about auth last week?”&lt;/td&gt;&lt;td&gt;A long-term memory store.&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;”Wait, what was the other thing you said we should do after this?”&lt;/td&gt;&lt;td&gt;Active context-window management.&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;
+&lt;table&gt;
+&lt;thead&gt;
+&lt;tr&gt;
+&lt;th&gt;What you say&lt;/th&gt;
+&lt;th&gt;What it actually needs&lt;/th&gt;
+&lt;/tr&gt;
+&lt;/thead&gt;
+&lt;tbody&gt;
+&lt;tr&gt;
+&lt;td&gt;“What did we decide about auth last week?”&lt;/td&gt;
+&lt;td&gt;A long-term memory store.&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;“Wait, what was the other thing you said we should do after this?”&lt;/td&gt;
+&lt;td&gt;Active context-window management.&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;
 &lt;p&gt;These are not the same layer. A long-term store sits &lt;em&gt;beside&lt;/em&gt; your conversation, like a
 notebook you keep open on the desk. It only holds what you bothered to write down, and it
 only helps when you reach for it. That’s exactly right for what carries across sessions: a
@@ -346,5 +348,7 @@ still yours to handle. That’s fine, and a good store is genuinely worth having
 no answer for the session that’s overflowing right now, which is the problem you’ll hit
 today, not next week.&lt;/p&gt;
 &lt;p&gt;Memory is table stakes. Managing the window, in the loop, while it fills, is the part
-nobody wants to build. Make sure you know which one you’re being sold.&lt;/p&gt;</content:encoded><dc:creator>Lore Team</dc:creator><category>memory</category><category>context management</category><category>agents</category></item><item><title>Introducing the Lore Blog</title><link>https://withlore.ai/blog/hello-lore/</link><guid isPermaLink="true">https://withlore.ai/blog/hello-lore/</guid><description>A home for product notes, memory architecture deep dives, and engineering updates from Lore.</description><pubDate>Fri, 05 Jun 2026 00:00:00 GMT</pubDate><content:encoded>&lt;p&gt;The Lore blog is ready for longer-form writing: release notes, implementation notes, architecture posts, and the practical lessons that show up when AI coding agents work inside real codebases for days at a time.&lt;/p&gt;
-&lt;p&gt;Future posts will cover LLM memory architecture, distillation techniques, context management strategies, and engineering updates from the Lore team.&lt;/p&gt;</content:encoded><dc:creator>Lore Team</dc:creator><category>memory</category><category>agents</category></item></channel></rss>
+nobody wants to build. Make sure you know which one you’re being sold.&lt;/p&gt;
+</content:encoded><dc:creator>Lore Team</dc:creator><category>memory</category><category>context management</category><category>agents</category></item><item><title>Introducing the Lore Blog</title><link>https://withlore.ai/blog/hello-lore/</link><guid isPermaLink="true">https://withlore.ai/blog/hello-lore/</guid><description>A home for product notes, memory architecture deep dives, and engineering updates from Lore.</description><pubDate>Fri, 05 Jun 2026 00:00:00 GMT</pubDate><content:encoded>&lt;p&gt;The Lore blog is ready for longer-form writing: release notes, implementation notes, architecture posts, and the practical lessons that show up when AI coding agents work inside real codebases for days at a time.&lt;/p&gt;
+&lt;p&gt;Future posts will cover LLM memory architecture, distillation techniques, context management strategies, and engineering updates from the Lore team.&lt;/p&gt;
+</content:encoded><dc:creator>Lore Team</dc:creator><category>memory</category><category>agents</category></item></channel></rss>
