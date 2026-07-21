@@ -5,13 +5,13 @@ codebase drifting and without losing the thing reviews were quietly doing for th
 built it. I never had enough of the right data, and I never had the time. It stayed a daydream.&lt;/p&gt;
 &lt;p&gt;I’m bringing it up because the debate about review has finally caught up to it, and I think both
 sides are half right in a way that’s worth untangling.&lt;/p&gt;
-&lt;h2 id=&quot;two-complaints-that-are-the-same-complaint&quot;&gt;Two complaints that are the same complaint&lt;/h2&gt;
+&lt;h2 id=&quot;the-same-complaint-from-two-sides&quot;&gt;The same complaint from two sides&lt;/h2&gt;
 &lt;p&gt;One camp says the whole point of writing code with agents is that a human still reads every line
 before it ships. Slow down, look closely, stay in control. The other camp, often the same people
 on a different day, says the job has quietly turned into something worse: you don’t write much
 anymore, you sit and read change after change the machine produced, and it is dull and a little
 soul-crushing. Reviewing slop, they call it.&lt;/p&gt;
-&lt;p&gt;Those sound like opposite positions. They are the same complaint. Review used to be where
+&lt;p&gt;Those sound like opposite positions. They’re the same one. Review used to be where
 judgment happened and where the team learned how the codebase was meant to work. Now, for a lot
 of people, it has shrunk to a checkpoint you sign off on. The “read every line” camp wants to
 protect what review was. The “this is soul-crushing” camp is telling you it has already gone.
