@@ -611,7 +611,8 @@ export const LoreConfig = z.object({
        *    768 dims (Matryoshka-capable: 64–768). Model downloaded on first use (~137MB INT8),
        *    cached locally. Uses task instruction prefixes (search_document: / search_query:).
        *  - "voyage": Voyage AI (VOYAGE_API_KEY, voyage-code-3, 1024 dims)
-       *  - "openai": OpenAI (OPENAI_API_KEY, text-embedding-3-small, 1536 dims)
+       *  - "openai": OpenAI (OPENAI_API_KEY, text-embedding-3-small, 1536 dims) —
+       *    or a self-hosted OpenAI-compatible server via `baseUrl`
        *  Set enabled: false to explicitly disable even with a provider available. */
       embeddings: z
         .object({
@@ -639,6 +640,19 @@ export const LoreConfig = z.object({
             .default("nomic-ai/nomic-embed-text-v1.5")
             .describe(
               "Model ID for the embedding provider. Default depends on provider.",
+            ),
+          /** Root URL for the "openai" provider's embeddings endpoint
+           *  (no trailing slash, no `/embeddings` suffix). Only applies to
+           *  provider: "openai" — points it at a self-hosted OpenAI-compatible
+           *  server (llama.cpp, llama-swap, vLLM, text-embeddings-inference,
+           *  etc.) instead of the real OpenAI API. Falls back to the
+           *  `OPENAI_BASE_URL` env var, then `https://api.openai.com/v1`. */
+          baseUrl: z
+            .string()
+            .url()
+            .optional()
+            .describe(
+              'Root URL for the "openai" provider\'s embeddings endpoint (no trailing slash, no `/embeddings` suffix). Points it at a self-hosted OpenAI-compatible server instead of the real OpenAI API. Falls back to `OPENAI_BASE_URL` env var, then `https://api.openai.com/v1`.',
             ),
           /** Embedding dimensions. Default: 768 (local) / 1024 (voyage) / 1536 (openai).
            *  For the local Nomic v1.5 model, supports Matryoshka dimensions: 64, 128, 256, 512, 768. */

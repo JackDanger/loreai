@@ -35,6 +35,31 @@ When installed via npm, local embeddings use the native `onnxruntime-node` backe
 
 If none apply, recall transparently falls back to FTS-only search.
 
+### Self-hosted embeddings (`openai` provider + `baseUrl`)
+
+The `"openai"` provider can point at any OpenAI-compatible embeddings endpoint
+instead of the real OpenAI API — a local llama.cpp/llama-swap/vLLM/TEI server,
+for example. Set `baseUrl` alongside `provider` in `.lore.json`:
+
+```json
+{
+  "search": {
+    "embeddings": {
+      "provider": "openai",
+      "model": "qwen-embed",
+      "baseUrl": "http://localhost:8080/v1"
+    }
+  }
+}
+```
+
+`OPENAI_API_KEY` still needs to be set (any non-empty value works if your
+server doesn't check it) — self-hosted servers generally don't validate it.
+`baseUrl` is the server root including `/v1` (unlike the `LORE_UPSTREAM_*`
+env vars below, which are root-only). You can also set it via the
+`OPENAI_BASE_URL` env var instead of `.lore.json`; the config value wins when
+both are set.
+
 ## Local / self-hosted LLM providers
 
 If you use a local LLM server (vllm, llama.cpp, ollama, etc.), set an environment variable so Lore's gateway knows where to forward requests:

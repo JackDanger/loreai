@@ -396,7 +396,7 @@ class VoyageProvider implements EmbeddingProvider {
 // OpenAI provider
 // ---------------------------------------------------------------------------
 
-const OPENAI_API_URL = "https://api.openai.com/v1/embeddings";
+const OPENAI_DEFAULT_BASE_URL = "https://api.openai.com/v1";
 
 type OpenAIResponse = {
   data: Array<{ embedding: number[]; index: number }>;
@@ -409,11 +409,26 @@ class OpenAIProvider implements EmbeddingProvider {
   private apiKey: string;
   private model: string;
   private dimensions: number;
+  /** Root URL (no trailing slash, no `/embeddings` suffix) for an
+   *  OpenAI-compatible embeddings endpoint. Defaults to the real OpenAI API;
+   *  overridable for self-hosted OpenAI-compatible servers (llama.cpp,
+   *  llama-swap, vLLM, text-embeddings-inference, etc.) via
+   *  `search.embeddings.baseUrl` in `.lore.json` or the `OPENAI_BASE_URL` env
+   *  var (config wins when both are set). */
+  private baseUrl: string;
 
-  constructor(apiKey: string, model: string, dimensions: number) {
+  constructor(
+    apiKey: string,
+    model: string,
+    dimensions: number,
+    baseUrl?: string,
+  ) {
     this.apiKey = apiKey;
     this.model = model;
     this.dimensions = dimensions;
+    const resolved =
+      baseUrl || process.env.OPENAI_BASE_URL || OPENAI_DEFAULT_BASE_URL;
+    this.baseUrl = resolved.replace(/\/+$/, "");
   }
 
   async embed(
@@ -429,7 +444,7 @@ class OpenAIProvider implements EmbeddingProvider {
       body.dimensions = this.dimensions;
     }
 
-    const res = await fetch(OPENAI_API_URL, {
+    const res = await fetch(`${this.baseUrl}/embeddings`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -1705,7 +1720,12 @@ function getProvider(): EmbeddingProvider | null {
         cachedProvider = null;
         return null;
       }
-      cachedProvider = new OpenAIProvider(apiKey, model, cfg.dimensions);
+      cachedProvider = new OpenAIProvider(
+        apiKey,
+        model,
+        cfg.dimensions,
+        cfg.baseUrl,
+      );
       break;
     }
     default:

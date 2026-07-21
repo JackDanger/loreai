@@ -191,6 +191,7 @@ Vector embedding search provider, model, and dimensions.
 | `enabled` | boolean | `true` |  | Enable vector embedding search. Set to false to explicitly disable. Default: true. |
 | `provider` | enum | `"local"` |  | Embedding provider. "local" (no API key, on-device), "voyage" (VOYAGE_API_KEY), "openai" (OPENAI_API_KEY). Default: "local". |
 | `model` | string | `"nomic-ai/nomic-embed-text-v1.5"` |  | Model ID for the embedding provider. Default depends on provider. |
+| `baseUrl` | string | — |  | Root URL for the "openai" provider's embeddings endpoint (no trailing slash, no `/embeddings` suffix). Points it at a self-hosted OpenAI-compatible server instead of the real OpenAI API. Falls back to `OPENAI_BASE_URL` env var, then `https://api.openai.com/v1`. |
 | `dimensions` | number | `768` | min 64, max 2048 | Embedding dimensions. Default: 768 (local) / 1024 (voyage) / 1536 (openai). Local Nomic v1.5 supports Matryoshka: 64, 128, 256, 512, 768. |
 | `workerOffload` | boolean | `true` |  | Run vector searches on a read-worker pool off the main event loop. Kill switch (default true); set false to force the in-process path. |
 | `workerPoolSize` | number | `2` | min 1, max 16 | Number of read-worker threads for off-thread vector search. Default: 2. |
