@@ -77,7 +77,8 @@ welcome to watch it.&lt;/p&gt;
 exists in a form that asks no one’s permission: token-space, local, model-agnostic, running
 today. In consuming intelligence, you are creating intelligence. That’s his line, and he’s
 right about it. The only question is who keeps it, and you can answer that one yourself this
-afternoon.&lt;/p&gt;</content:encoded><dc:creator>Lore Team</dc:creator><category>memory</category><category>context management</category><category>agents</category></item><item><title>The compaction tax</title><link>https://withlore.ai/blog/the-compaction-tax/</link><guid isPermaLink="true">https://withlore.ai/blog/the-compaction-tax/</guid><description>A real coding-agent memory benchmark, with receipts. The two taxes memory puts on your dollars and your focus, each with a number attached.</description><pubDate>Sat, 11 Jul 2026 00:00:00 GMT</pubDate><content:encoded>&lt;p&gt;We have made two arguments on this blog. In
+afternoon.&lt;/p&gt;
+</content:encoded><dc:creator>Lore Team</dc:creator><category>memory</category><category>context management</category><category>agents</category></item><item><title>The compaction tax</title><link>https://withlore.ai/blog/the-compaction-tax/</link><guid isPermaLink="true">https://withlore.ai/blog/the-compaction-tax/</guid><description>A real coding-agent memory benchmark, with receipts. The two taxes memory puts on your dollars and your focus, each with a number attached.</description><pubDate>Sat, 11 Jul 2026 00:00:00 GMT</pubDate><content:encoded>&lt;p&gt;We have made two arguments on this blog. In
 &lt;a href=&quot;https://withlore.ai/blog/why-memory-is-not-enough&quot;&gt;Why memory is not enough&lt;/a&gt; we said a store on the
 sidelines cannot save the session that is overflowing right now, because compaction
 runs whether or not it is about to drop something you still need. In
@@ -121,35 +122,44 @@ one, and we report the better of the two.&lt;/p&gt;
 client does the same thing at that point: it compacts, crushing the older turns into a
 lossy summary and dropping the originals. That is the moment the facts you mentioned an
 hour ago quietly fall out.&lt;/p&gt;
+&lt;p&gt;One thing to be upfront about, because it shapes every token number in this post: we do
+not wait for a real workload to slowly fill the window. We force it, by piping a large
+reference blob (roughly 40K tokens here, more in the cross-session task) into most turns.
+Left to its own devices an agent keeps its context small, so a natural session might take
+a very long time to overflow, or never. Compressing that into a benchmark means
+manufacturing the pressure. The consequence is that the absolute token and cost figures
+below are a product of that artificial fill, not a measurement of what a typical session
+costs, and you should read them as &lt;em&gt;relative&lt;/em&gt; comparisons between arms under identical
+pressure, not as a bill you would see in normal use.&lt;/p&gt;
 &lt;p&gt;Here is that session, sixteen turns, with the four facts mentioned once near the start,
 on the frontier model:&lt;/p&gt;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-&lt;table&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;Sonnet-5, one long session&lt;/th&gt;&lt;th&gt;retention&lt;/th&gt;&lt;th&gt;compactions&lt;/th&gt;&lt;th&gt;turns&lt;/th&gt;&lt;th&gt;cost&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td&gt;vanilla&lt;/td&gt;&lt;td&gt;16%&lt;/td&gt;&lt;td&gt;3&lt;/td&gt;&lt;td&gt;59&lt;/td&gt;&lt;td&gt;$5.51&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;strong&gt;Lore&lt;/strong&gt;&lt;/td&gt;&lt;td&gt;&lt;strong&gt;100%&lt;/strong&gt;&lt;/td&gt;&lt;td&gt;&lt;strong&gt;0&lt;/strong&gt;&lt;/td&gt;&lt;td&gt;&lt;strong&gt;33&lt;/strong&gt;&lt;/td&gt;&lt;td&gt;$9.96&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;
+&lt;table&gt;
+&lt;thead&gt;
+&lt;tr&gt;
+&lt;th&gt;Sonnet-5, one long session&lt;/th&gt;
+&lt;th&gt;retention&lt;/th&gt;
+&lt;th&gt;compactions&lt;/th&gt;
+&lt;th&gt;turns&lt;/th&gt;
+&lt;th&gt;cost&lt;/th&gt;
+&lt;/tr&gt;
+&lt;/thead&gt;
+&lt;tbody&gt;
+&lt;tr&gt;
+&lt;td&gt;vanilla&lt;/td&gt;
+&lt;td&gt;16%&lt;/td&gt;
+&lt;td&gt;3&lt;/td&gt;
+&lt;td&gt;59&lt;/td&gt;
+&lt;td&gt;$5.51&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;&lt;strong&gt;Lore&lt;/strong&gt;&lt;/td&gt;
+&lt;td&gt;&lt;strong&gt;100%&lt;/strong&gt;&lt;/td&gt;
+&lt;td&gt;&lt;strong&gt;0&lt;/strong&gt;&lt;/td&gt;
+&lt;td&gt;&lt;strong&gt;33&lt;/strong&gt;&lt;/td&gt;
+&lt;td&gt;$9.96&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;
 &lt;p&gt;Two things are happening at once. The vanilla agent compacts three times and loses five
 of every six probes to it. Lore never compacts, because it manages the window on every
 turn instead of waiting for it to overflow, and it keeps all four facts, in nearly half
@@ -165,30 +175,30 @@ not “Lore is cheaper.” It is “Lore finishes, reliably, in far fewer turns,
 read its entire cost off one bill.”&lt;/p&gt;
 &lt;p&gt;The pattern holds on a cheaper model, where the dollars are small enough to see the shape
 plainly:&lt;/p&gt;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-&lt;table&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;DeepSeek Flash, one long session&lt;/th&gt;&lt;th&gt;retention&lt;/th&gt;&lt;th&gt;compactions&lt;/th&gt;&lt;th&gt;turns&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td&gt;vanilla&lt;/td&gt;&lt;td&gt;0%&lt;/td&gt;&lt;td&gt;3&lt;/td&gt;&lt;td&gt;49&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;strong&gt;Lore&lt;/strong&gt;&lt;/td&gt;&lt;td&gt;&lt;strong&gt;100%&lt;/strong&gt;&lt;/td&gt;&lt;td&gt;&lt;strong&gt;0&lt;/strong&gt;&lt;/td&gt;&lt;td&gt;&lt;strong&gt;36&lt;/strong&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;
+&lt;table&gt;
+&lt;thead&gt;
+&lt;tr&gt;
+&lt;th&gt;DeepSeek Flash, one long session&lt;/th&gt;
+&lt;th&gt;retention&lt;/th&gt;
+&lt;th&gt;compactions&lt;/th&gt;
+&lt;th&gt;turns&lt;/th&gt;
+&lt;/tr&gt;
+&lt;/thead&gt;
+&lt;tbody&gt;
+&lt;tr&gt;
+&lt;td&gt;vanilla&lt;/td&gt;
+&lt;td&gt;0%&lt;/td&gt;
+&lt;td&gt;3&lt;/td&gt;
+&lt;td&gt;49&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;&lt;strong&gt;Lore&lt;/strong&gt;&lt;/td&gt;
+&lt;td&gt;&lt;strong&gt;100%&lt;/strong&gt;&lt;/td&gt;
+&lt;td&gt;&lt;strong&gt;0&lt;/strong&gt;&lt;/td&gt;
+&lt;td&gt;&lt;strong&gt;36&lt;/strong&gt;&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;
 &lt;p&gt;The loss is quiet, which is what makes it easy to miss. Independent research on
 context rot (&lt;a href=&quot;https://www.trychroma.com/research/context-rot&quot;&gt;Chroma’s report&lt;/a&gt;, and the
 &lt;a href=&quot;https://github.com/Priyanshu-byte-coder/contextrot&quot;&gt;contextrot&lt;/a&gt; tool that measures it on
@@ -202,76 +212,76 @@ for, so we put Lore next to two good ones:
 &lt;a href=&quot;https://github.com/Aamirofficiall/mnemonic&quot;&gt;mnemonic&lt;/a&gt; (a local SQLite store, the
 closest analogue to how Lore keeps things on your own disk).&lt;/p&gt;
 &lt;p&gt;On the frontier model, everyone with memory got it right:&lt;/p&gt;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-&lt;table&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;Sonnet-5, cross-session&lt;/th&gt;&lt;th&gt;retention&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td&gt;vanilla&lt;/td&gt;&lt;td&gt;0%&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;Lore&lt;/td&gt;&lt;td&gt;100%&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;mnemonic&lt;/td&gt;&lt;td&gt;100%&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;mem0&lt;/td&gt;&lt;td&gt;100%&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;
+&lt;table&gt;
+&lt;thead&gt;
+&lt;tr&gt;
+&lt;th&gt;Sonnet-5, cross-session&lt;/th&gt;
+&lt;th&gt;retention&lt;/th&gt;
+&lt;/tr&gt;
+&lt;/thead&gt;
+&lt;tbody&gt;
+&lt;tr&gt;
+&lt;td&gt;vanilla&lt;/td&gt;
+&lt;td&gt;0%&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Lore&lt;/td&gt;
+&lt;td&gt;100%&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;mnemonic&lt;/td&gt;
+&lt;td&gt;100%&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;mem0&lt;/td&gt;
+&lt;td&gt;100%&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;
 &lt;p&gt;That is the honest headline: a good store works, and on a capable model it works
 reliably. We are not going to pretend otherwise. When we opened up what each system had
 actually captured, they had all extracted the four facts correctly. This is not a case of
 one tool storing better than another.&lt;/p&gt;
 &lt;p&gt;The difference shows up on the cheaper, everyday models, the kind you actually run at
 scale:&lt;/p&gt;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-&lt;table&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;cross-session, cheaper model&lt;/th&gt;&lt;th&gt;retention&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td&gt;vanilla&lt;/td&gt;&lt;td&gt;0%&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;strong&gt;Lore (DeepSeek Flash)&lt;/strong&gt;&lt;/td&gt;&lt;td&gt;&lt;strong&gt;83%&lt;/strong&gt;&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;mnemonic (DeepSeek Flash)&lt;/td&gt;&lt;td&gt;25%&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;mem0 (DeepSeek Flash)&lt;/td&gt;&lt;td&gt;0%&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;strong&gt;Lore (MiniMax-M3)&lt;/strong&gt;&lt;/td&gt;&lt;td&gt;&lt;strong&gt;~92%&lt;/strong&gt;&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;mnemonic (MiniMax-M3)&lt;/td&gt;&lt;td&gt;40%&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;mem0 (MiniMax-M3)&lt;/td&gt;&lt;td&gt;42%&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;
+&lt;table&gt;
+&lt;thead&gt;
+&lt;tr&gt;
+&lt;th&gt;cross-session, cheaper model&lt;/th&gt;
+&lt;th&gt;retention&lt;/th&gt;
+&lt;/tr&gt;
+&lt;/thead&gt;
+&lt;tbody&gt;
+&lt;tr&gt;
+&lt;td&gt;vanilla&lt;/td&gt;
+&lt;td&gt;0%&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;&lt;strong&gt;Lore (DeepSeek Flash)&lt;/strong&gt;&lt;/td&gt;
+&lt;td&gt;&lt;strong&gt;83%&lt;/strong&gt;&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;mnemonic (DeepSeek Flash)&lt;/td&gt;
+&lt;td&gt;25%&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;mem0 (DeepSeek Flash)&lt;/td&gt;
+&lt;td&gt;0%&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;&lt;strong&gt;Lore (MiniMax-M3)&lt;/strong&gt;&lt;/td&gt;
+&lt;td&gt;&lt;strong&gt;~92%&lt;/strong&gt;&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;mnemonic (MiniMax-M3)&lt;/td&gt;
+&lt;td&gt;40%&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;mem0 (MiniMax-M3)&lt;/td&gt;
+&lt;td&gt;42%&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;
 &lt;p&gt;The gap is not about storage quality, we just saw the stores hold the same facts. It is
 about who has to remember to use it. A store the agent drives only works if the agent
 decides, on its own, to save the offhand value when it is mentioned, and then to go
@@ -306,37 +316,37 @@ written, it is whether anything gets written at all without the agent being told
 &lt;h2 id=&quot;what-it-costs-honestly&quot;&gt;What it costs, honestly&lt;/h2&gt;
 &lt;p&gt;Cost is where memory tools get quiet, so here is ours out loud, and it does not flatter
 us. On the cross-session run with Sonnet:&lt;/p&gt;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-&lt;table&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;&lt;/th&gt;&lt;th&gt;measured cost&lt;/th&gt;&lt;th&gt;third-party backend cost&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td&gt;vanilla&lt;/td&gt;&lt;td&gt;$4.04&lt;/td&gt;&lt;td&gt;none&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;mnemonic&lt;/td&gt;&lt;td&gt;$3.98&lt;/td&gt;&lt;td&gt;Gemini (embeddings + extraction), external&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;mem0&lt;/td&gt;&lt;td&gt;$4.05–$4.33&lt;/td&gt;&lt;td&gt;mem0 cloud subscription, external&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;strong&gt;Lore&lt;/strong&gt;&lt;/td&gt;&lt;td&gt;&lt;strong&gt;$5.86&lt;/strong&gt;&lt;/td&gt;&lt;td&gt;none&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;
+&lt;table&gt;
+&lt;thead&gt;
+&lt;tr&gt;
+&lt;th&gt;&lt;/th&gt;
+&lt;th&gt;measured cost&lt;/th&gt;
+&lt;th&gt;third-party backend cost&lt;/th&gt;
+&lt;/tr&gt;
+&lt;/thead&gt;
+&lt;tbody&gt;
+&lt;tr&gt;
+&lt;td&gt;vanilla&lt;/td&gt;
+&lt;td&gt;$4.04&lt;/td&gt;
+&lt;td&gt;none&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;mnemonic&lt;/td&gt;
+&lt;td&gt;$3.98&lt;/td&gt;
+&lt;td&gt;Gemini (embeddings + extraction), external&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;mem0&lt;/td&gt;
+&lt;td&gt;$4.05–$4.33&lt;/td&gt;
+&lt;td&gt;mem0 cloud subscription, external&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;&lt;strong&gt;Lore&lt;/strong&gt;&lt;/td&gt;
+&lt;td&gt;&lt;strong&gt;$5.86&lt;/strong&gt;&lt;/td&gt;
+&lt;td&gt;none&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;
 &lt;p&gt;Lore is the most expensive line, and we want to be precise about why, because it is not
 the reason you might guess. It is not cache-write churn, both arms write essentially
 nothing to cache. It is two honest things. First, Lore’s number is the &lt;em&gt;whole&lt;/em&gt; bill: the
@@ -390,6 +400,10 @@ lifts, and we kept those runs in the averages rather than trim them. We also exc
 every arm, runs where a memory tool made zero calls, because a tool that was never invoked
 tells you nothing about the tool. And we could not evaluate Lore on an anonymous free
 endpoint, because its background worker needs a real key to run.&lt;/p&gt;
+&lt;p&gt;And, as said above, the window pressure is manufactured: we pipe large reference blobs
+into most turns to force compaction on a benchmark timescale. That makes the token and
+cost totals artifacts of the harness, not a forecast of your bill. It is why we lean on
+the ratios between arms, run under the same forced load, rather than the raw numbers.&lt;/p&gt;
 &lt;p&gt;All of it, the tasks, the scorer, the raw per-run numbers, is in the repo. Run
 &lt;code&gt;lore eval&lt;/code&gt; and check our work.&lt;/p&gt;
 &lt;h2 id=&quot;back-to-the-one-question&quot;&gt;Back to the one question&lt;/h2&gt;
@@ -414,7 +428,8 @@ ties us, and the win narrows to fewer turns and a bill you can fully account for
 cheaper models people actually run at scale, the win is retention itself, because those
 models do not reliably remember to use a store they have to drive by hand, and Lore does
 not make them. We could always &lt;em&gt;feel&lt;/em&gt; that difference. Putting a test around it, and being
-honest when the test caught us, is how we get to keep improving it.&lt;/p&gt;</content:encoded><dc:creator>Lore Team</dc:creator><category>memory</category><category>context management</category><category>benchmark</category><category>agents</category></item><item><title>How Lore remembers, forgets, and changes its mind</title><link>https://withlore.ai/blog/how-lore-remembers-and-forgets/</link><guid isPermaLink="true">https://withlore.ai/blog/how-lore-remembers-and-forgets/</guid><description>Most memory tools now ship a set of principles for how an agent should manage its context. Lore&apos;s principles work differently, because the layer enforces them instead of asking the agent to. Here are the rules Lore runs on.</description><pubDate>Thu, 02 Jul 2026 00:00:00 GMT</pubDate><content:encoded>&lt;p&gt;Everywhere you look, agents are being taught to fix themselves. Self-healing loops,
+honest when the test caught us, is how we get to keep improving it.&lt;/p&gt;
+</content:encoded><dc:creator>Lore Team</dc:creator><category>memory</category><category>context management</category><category>benchmark</category><category>agents</category></item><item><title>How Lore remembers, forgets, and changes its mind</title><link>https://withlore.ai/blog/how-lore-remembers-and-forgets/</link><guid isPermaLink="true">https://withlore.ai/blog/how-lore-remembers-and-forgets/</guid><description>Most memory tools now ship a set of principles for how an agent should manage its context. Lore&apos;s principles work differently, because the layer enforces them instead of asking the agent to. Here are the rules Lore runs on.</description><pubDate>Thu, 02 Jul 2026 00:00:00 GMT</pubDate><content:encoded>&lt;p&gt;Everywhere you look, agents are being taught to fix themselves. Self-healing loops,
 self-improving memory, a model that reads back its own transcript, rewrites its own
 instructions, and prunes whatever it decides has gone stale. There is real energy here, and
 some of it genuinely works.&lt;/p&gt;
@@ -508,7 +523,8 @@ is one you never have to hope about.&lt;/p&gt;
 not a description you take on faith. Lore is &lt;a href=&quot;https://fair.io&quot;&gt;Fair Source&lt;/a&gt;
 (FSL-1.1-Apache-2.0), so the code that decides what your agent remembers and forgets is right
 there for you to read, and it turns into Apache 2.0 on a timer. Principles you can enforce are
-better than principles you have to believe.&lt;/p&gt;</content:encoded><dc:creator>Lore Team</dc:creator><category>memory</category><category>principles</category><category>agents</category></item><item><title>Why memory is not enough</title><link>https://withlore.ai/blog/why-memory-is-not-enough/</link><guid isPermaLink="true">https://withlore.ai/blog/why-memory-is-not-enough/</guid><description>A long-term memory store remembers what you said last week. It can&apos;t manage the context window that&apos;s overflowing right now. Those are two different problems, and only one of them is getting solved.</description><pubDate>Fri, 26 Jun 2026 00:00:00 GMT</pubDate><content:encoded>&lt;p&gt;Ask anyone building agents what “memory” means and you’ll get the same answer: a place to
+better than principles you have to believe.&lt;/p&gt;
+</content:encoded><dc:creator>Lore Team</dc:creator><category>memory</category><category>principles</category><category>agents</category></item><item><title>Why memory is not enough</title><link>https://withlore.ai/blog/why-memory-is-not-enough/</link><guid isPermaLink="true">https://withlore.ai/blog/why-memory-is-not-enough/</guid><description>A long-term memory store remembers what you said last week. It can&apos;t manage the context window that&apos;s overflowing right now. Those are two different problems, and only one of them is getting solved.</description><pubDate>Fri, 26 Jun 2026 00:00:00 GMT</pubDate><content:encoded>&lt;p&gt;Ask anyone building agents what “memory” means and you’ll get the same answer: a place to
 store facts and decisions so the agent can pull them back later. A vector DB, a knowledge
 graph, a folder of notes, take your pick. It remembers what you discussed last week, and
 there are good tools that do this well now.&lt;/p&gt;
@@ -529,24 +545,24 @@ quite remember its own name. We all quietly accepted this for something that hap
 session, often more than once: the most predictable failure in agentic coding, answered by a
 guillotine. So why has nobody built the thing that keeps up?&lt;/p&gt;
 &lt;h2 id=&quot;two-problems-hiding-behind-one-word&quot;&gt;Two problems hiding behind one word&lt;/h2&gt;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-&lt;table&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;What you say&lt;/th&gt;&lt;th&gt;What it actually needs&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td&gt;”What did we decide about auth last week?”&lt;/td&gt;&lt;td&gt;A long-term memory store.&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;”Wait, what was the other thing you said we should do after this?”&lt;/td&gt;&lt;td&gt;Active context-window management.&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;
+&lt;table&gt;
+&lt;thead&gt;
+&lt;tr&gt;
+&lt;th&gt;What you say&lt;/th&gt;
+&lt;th&gt;What it actually needs&lt;/th&gt;
+&lt;/tr&gt;
+&lt;/thead&gt;
+&lt;tbody&gt;
+&lt;tr&gt;
+&lt;td&gt;“What did we decide about auth last week?”&lt;/td&gt;
+&lt;td&gt;A long-term memory store.&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;“Wait, what was the other thing you said we should do after this?”&lt;/td&gt;
+&lt;td&gt;Active context-window management.&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;
 &lt;p&gt;These are not the same layer. A long-term store sits &lt;em&gt;beside&lt;/em&gt; your conversation, like a
 notebook you keep open on the desk. It only holds what you bothered to write down, and it
 only helps when you reach for it. That’s exactly right for what carries across sessions: a
@@ -683,5 +699,7 @@ still yours to handle. That’s fine, and a good store is genuinely worth having
 no answer for the session that’s overflowing right now, which is the problem you’ll hit
 today, not next week.&lt;/p&gt;
 &lt;p&gt;Memory is table stakes. Managing the window, in the loop, while it fills, is the part
-nobody wants to build. Make sure you know which one you’re being sold.&lt;/p&gt;</content:encoded><dc:creator>Lore Team</dc:creator><category>memory</category><category>context management</category><category>agents</category></item><item><title>Introducing the Lore Blog</title><link>https://withlore.ai/blog/hello-lore/</link><guid isPermaLink="true">https://withlore.ai/blog/hello-lore/</guid><description>A home for product notes, memory architecture deep dives, and engineering updates from Lore.</description><pubDate>Fri, 05 Jun 2026 00:00:00 GMT</pubDate><content:encoded>&lt;p&gt;The Lore blog is ready for longer-form writing: release notes, implementation notes, architecture posts, and the practical lessons that show up when AI coding agents work inside real codebases for days at a time.&lt;/p&gt;
-&lt;p&gt;Future posts will cover LLM memory architecture, distillation techniques, context management strategies, and engineering updates from the Lore team.&lt;/p&gt;</content:encoded><dc:creator>Lore Team</dc:creator><category>memory</category><category>agents</category></item></channel></rss>
+nobody wants to build. Make sure you know which one you’re being sold.&lt;/p&gt;
+</content:encoded><dc:creator>Lore Team</dc:creator><category>memory</category><category>context management</category><category>agents</category></item><item><title>Introducing the Lore Blog</title><link>https://withlore.ai/blog/hello-lore/</link><guid isPermaLink="true">https://withlore.ai/blog/hello-lore/</guid><description>A home for product notes, memory architecture deep dives, and engineering updates from Lore.</description><pubDate>Fri, 05 Jun 2026 00:00:00 GMT</pubDate><content:encoded>&lt;p&gt;The Lore blog is ready for longer-form writing: release notes, implementation notes, architecture posts, and the practical lessons that show up when AI coding agents work inside real codebases for days at a time.&lt;/p&gt;
+&lt;p&gt;Future posts will cover LLM memory architecture, distillation techniques, context management strategies, and engineering updates from the Lore team.&lt;/p&gt;
+</content:encoded><dc:creator>Lore Team</dc:creator><category>memory</category><category>agents</category></item></channel></rss>
