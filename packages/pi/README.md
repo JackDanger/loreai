@@ -60,6 +60,29 @@ env vars below, which are root-only). You can also set it via the
 `OPENAI_BASE_URL` env var instead of `.lore.json`; the config value wins when
 both are set.
 
+#### Machine-wide, without a `.lore.json` per project
+
+If you want every project on a box to default to your self-hosted embedder —
+not just ones that happen to have a `.lore.json` — set these in your shell
+profile instead:
+
+```bash
+export OPENAI_API_KEY=nope
+export OPENAI_BASE_URL=http://10.0.2.240:8080/v1
+export LORE_EMBEDDINGS_PROVIDER=openai
+export LORE_EMBEDDINGS_MODEL=qwen-embed        # your server's model id
+export LORE_EMBEDDINGS_DIMENSIONS=4096         # your model's real output size
+```
+
+`LORE_EMBEDDINGS_PROVIDER`/`_MODEL`/`_DIMENSIONS` only apply when the
+matching `.lore.json` field is still at its `"local"`-provider default — a
+project that sets its own `search.embeddings.provider` to something other
+than `"local"` (e.g. pins `"voyage"`) is unaffected. One caveat: a
+`.lore.json` that explicitly writes out `"provider": "local"` (same value as
+the default) can't be told apart from not setting it at all, so the env var
+overrides that case too — opt a project fully out by pinning a *different*
+provider instead.
+
 ## Local / self-hosted LLM providers
 
 If you use a local LLM server (vllm, llama.cpp, ollama, etc.), set an environment variable so Lore's gateway knows where to forward requests:

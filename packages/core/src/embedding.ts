@@ -1682,6 +1682,68 @@ function getProviderApiKey(provider: string): string | undefined {
 
 let cachedProvider: EmbeddingProvider | null | undefined;
 
+/**
+ * Machine-wide embedding overrides for hosts with no per-project `.lore.json`
+ * — e.g. a self-hosted embedding server every project on the box should use
+ * by default, without adding a config file to each one.
+ *
+ * Each of provider/model/dimensions is overridden independently, and only
+ * when that specific field is still at its `local`-provider schema default
+ * (`"local"` / `"nomic-ai/nomic-embed-text-v1.5"` / `768`). A caveat this
+ * implies: the schema default and an explicit `.lore.json` value that
+ * happens to MATCH the default (e.g. `"provider": "local"` written out
+ * explicitly) are indistinguishable, so that specific case IS overridden by
+ * the env var too — only a value that *differs* from the default is
+ * guaranteed to win over it. Invalid/unset env values are ignored.
+ *
+ * When `LORE_EMBEDDINGS_PROVIDER` switches the provider away from "local"
+ * but model/dimensions weren't separately overridden (env or config), they
+ * fall back to that provider's own defaults (`PROVIDER_DEFAULTS`) rather
+ * than staying on the local ONNX model's — sending a local model name like
+ * `nomic-ai/nomic-embed-text-v1.5` to a remote API would just 400.
+ *
+ *   LORE_EMBEDDINGS_PROVIDER=openai
+ *   LORE_EMBEDDINGS_MODEL=qwen-embed
+ *   LORE_EMBEDDINGS_DIMENSIONS=4096
+ */
+function resolveEmbeddingSettings(cfg: {
+  provider: string;
+  model: string;
+  dimensions: number;
+}): { providerName: string; model: string; dimensions: number } {
+  const localDefaults = PROVIDER_DEFAULTS.local;
+
+  let providerName = cfg.provider;
+  if (providerName === "local") {
+    const envProvider = process.env.LORE_EMBEDDINGS_PROVIDER;
+    if (envProvider === "voyage" || envProvider === "openai") {
+      providerName = envProvider;
+    }
+  }
+  const providerChanged = providerName !== cfg.provider;
+  const resolvedDefaults = PROVIDER_DEFAULTS[providerName] ?? localDefaults;
+
+  let model = cfg.model;
+  if (model === localDefaults.model) {
+    model = process.env.LORE_EMBEDDINGS_MODEL || model;
+    if (model === localDefaults.model && providerChanged) {
+      model = resolvedDefaults.model;
+    }
+  }
+
+  let dimensions = cfg.dimensions;
+  if (dimensions === localDefaults.dimensions) {
+    const envDimensions = Number(process.env.LORE_EMBEDDINGS_DIMENSIONS);
+    if (Number.isInteger(envDimensions) && envDimensions > 0) {
+      dimensions = envDimensions;
+    } else if (providerChanged) {
+      dimensions = resolvedDefaults.dimensions;
+    }
+  }
+
+  return { providerName, model, dimensions };
+}
+
 function getProvider(): EmbeddingProvider | null {
   if (cachedProvider !== undefined) return cachedProvider;
 
@@ -1691,8 +1753,7 @@ function getProvider(): EmbeddingProvider | null {
     return null;
   }
 
-  const providerName = cfg.provider;
-  const model = cfg.model;
+  const { providerName, model, dimensions } = resolveEmbeddingSettings(cfg);
 
   switch (providerName) {
     case "local": {
@@ -1702,7 +1763,7 @@ function getProvider(): EmbeddingProvider | null {
       // as broken and callers degrade to FTS-only search. The pool wraps
       // one or more LocalProvider workers (memory-gated) so concurrent
       // embeds run in parallel instead of serializing (#999).
-      cachedProvider = new EmbeddingPool(model, cfg.dimensions);
+      cachedProvider = new EmbeddingPool(model, dimensions);
       break;
     }
     case "voyage": {
@@ -1711,7 +1772,7 @@ function getProvider(): EmbeddingProvider | null {
         cachedProvider = null;
         return null;
       }
-      cachedProvider = new VoyageProvider(apiKey, model, cfg.dimensions);
+      cachedProvider = new VoyageProvider(apiKey, model, dimensions);
       break;
     }
     case "openai": {
@@ -1723,7 +1784,7 @@ function getProvider(): EmbeddingProvider | null {
       cachedProvider = new OpenAIProvider(
         apiKey,
         model,
-        cfg.dimensions,
+        dimensions,
         cfg.baseUrl,
       );
       break;
