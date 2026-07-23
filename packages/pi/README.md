@@ -106,6 +106,39 @@ The URL should be the **server root** — do not include `/v1` (the gateway appe
 
 Cloud providers (Anthropic, OpenAI, etc.) are routed automatically by model name and don't need this.
 
+### Self-hosted model context/output limits
+
+The gateway sizes each turn's `max_tokens` dynamically from the model's real
+context/output limits, looked up in the public [models.dev](https://models.dev)
+catalog. A self-hosted model with a custom name you picked yourself (e.g.
+`qwen-fast`) isn't in that catalog — the lookup falls back to prefix-matching
+the id against catalog entries, which can match an unrelated real model and
+silently inherit **its** limits. In the worst case this collapses the
+effective `max_tokens` for a turn to almost nothing, truncating the response
+mid-generation and forcing an emergency compaction.
+
+Declare the real limits explicitly to bypass that lookup entirely for your
+model ids — in `.lore.json`:
+
+```json
+{
+  "modelLimits": {
+    "qwen-fast": { "context": 262144, "output": 8192 },
+    "qwen-smart": { "context": 262144, "output": 8192 }
+  }
+}
+```
+
+Or machine-wide via `LORE_MODEL_OVERRIDES` (same shape, as a JSON string;
+`.lore.json`'s `modelLimits` wins when both are set):
+
+```bash
+export LORE_MODEL_OVERRIDES='{"qwen-fast":{"context":262144,"output":8192},"qwen-smart":{"context":262144,"output":8192}}'
+```
+
+Matching is exact model-id only — never fuzzy — so an override can't
+accidentally leak onto a different model.
+
 ## Companion packages
 
 Lore ships as three packages sharing the same SQLite database at `~/.local/share/lore/lore.db`:

@@ -42,6 +42,45 @@ export const LoreConfig = z.object({
     .describe(
       "Background-worker model for distillation, curation, and query expansion. Same-provider invariant: workers MUST use the same provider as the session.",
     ),
+  /**
+   * Explicit context/output-limit overrides for models unknown to models.dev
+   * — chiefly self-hosted models with custom names (llama.cpp/llama-swap/
+   * vLLM/Ollama model ids you chose yourself, e.g. "qwen-fast"). Without an
+   * override, the gateway's dynamic max_tokens sizing (`getModelSpec` in
+   * packages/gateway/src/pipeline.ts) falls back to prefix-matching the
+   * model id against the public models.dev catalog — for a custom name that
+   * lookup can match an unrelated real model and inherit ITS limits,
+   * silently producing a wrong (sometimes drastically too small) max_tokens
+   * for a turn, truncating the response mid-generation.
+   *
+   * Matched by EXACT model id only — never fuzzy — and checked before any
+   * models.dev lookup is attempted.
+   *
+   * Also settable machine-wide via the `LORE_MODEL_OVERRIDES` env var (a
+   * JSON object with this same shape), so every project on a box gets
+   * correct limits without a `.lore.json` in each one. This config field
+   * wins when both are set.
+   */
+  modelLimits: z
+    .record(
+      z.string(),
+      z.object({
+        context: z
+          .number()
+          .int()
+          .positive()
+          .describe("Real context window size (tokens) for this model id."),
+        output: z
+          .number()
+          .int()
+          .positive()
+          .describe("Real max output tokens for this model id."),
+      }),
+    )
+    .optional()
+    .describe(
+      "Exact-match model-id → {context, output} overrides for models the public models.dev catalog doesn't know about (self-hosted custom model names). Also settable via LORE_MODEL_OVERRIDES env var (JSON); this field wins when both are set.",
+    ),
   budget: z
     .object({
       distilled: z

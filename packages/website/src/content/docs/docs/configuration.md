@@ -40,6 +40,7 @@ The cleanest way to override a single field is via env var if Lore reads it, or 
 
 - [`model`](#model) — Default session model. When omitted, Lore uses the model from the first client request.
 - [`workerModel`](#workerModel) — Background-worker model for distillation, curation, and query expansion. Same-provider invariant: workers MUST use the same provider as the session.
+- [`modelLimits`](#modelLimits) — Exact-match model-id → {context, output} overrides for models the public models.dev catalog doesn't know about (self-hosted custom model names). Also settable via LORE_MODEL_OVERRIDES env var (JSON); this field wins when both are set.
 - [`budget`](#budget) — Context-window budget fractions. Sum plus LTM ≈ 1.0.
 - [`idleResumeMinutes`](#idleResumeMinutes) — Minutes of inactivity after which Lore refreshes the byte-identity caches on resume (upstream prompt cache is cold). 5 = matches Anthropic's default-tier TTL. Set to 60 for extended (1h) cache tier. 0 to disable. Default: 5.
 - [`distillation`](#distillation) — Distillation pipeline tuning (segment size, thresholds, tool-output truncation).
@@ -73,6 +74,11 @@ Background-worker model for distillation, curation, and query expansion. Same-pr
 |---|---|---|---|---|
 | `providerID` | string | — |  | Provider ID for the worker model. |
 | `modelID` | string | — |  | Model identifier within the provider. |
+
+
+## `modelLimits`
+
+Exact-match model-id → {context, output} overrides for models the public models.dev catalog doesn't know about (self-hosted custom model names). Also settable via LORE_MODEL_OVERRIDES env var (JSON); this field wins when both are set.
 
 
 ## `budget`

@@ -1927,6 +1927,62 @@ type ModelSpec = {
 
 const DEFAULT_MODEL_SPEC: ModelSpec = { context: 200_000, output: 8_192 };
 
+/** Parsed cache for LORE_MODEL_OVERRIDES so the hot request path never
+ *  re-parses JSON per turn. Keyed by the raw env string so a changed env
+ *  var (e.g. in tests) invalidates the cache instead of sticking forever. */
+let cachedEnvOverridesRaw: string | undefined;
+let cachedEnvOverrides: Record<string, { context: number; output: number }> =
+  {};
+
+function getEnvModelOverrides(): Record<
+  string,
+  { context: number; output: number }
+> {
+  const raw = process.env.LORE_MODEL_OVERRIDES;
+  if (raw === cachedEnvOverridesRaw) return cachedEnvOverrides;
+  cachedEnvOverridesRaw = raw;
+  cachedEnvOverrides = {};
+  if (!raw) return cachedEnvOverrides;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      for (const [id, limits] of Object.entries(
+        parsed as Record<string, unknown>,
+      )) {
+        if (
+          limits &&
+          typeof limits === "object" &&
+          typeof (limits as { context?: unknown }).context === "number" &&
+          typeof (limits as { output?: unknown }).output === "number"
+        ) {
+          cachedEnvOverrides[id] = limits as {
+            context: number;
+            output: number;
+          };
+        }
+      }
+    }
+  } catch (e) {
+    log.warn(
+      `LORE_MODEL_OVERRIDES: failed to parse as JSON (${e instanceof Error ? e.message : String(e)}) — ignoring`,
+    );
+  }
+  return cachedEnvOverrides;
+}
+
+/**
+ * Exact-match model-id capability override: `.lore.json`'s `modelLimits`
+ * wins, then the `LORE_MODEL_OVERRIDES` env var, else `undefined` (falls
+ * through to the models.dev catalog lookup in {@link getModelSpec}). Never
+ * fuzzy — only an identical model id string matches, unlike the catalog
+ * lookup's prefix matching.
+ */
+function getModelLimitOverride(
+  model: string,
+): { context: number; output: number } | undefined {
+  return loreConfig().modelLimits?.[model] ?? getEnvModelOverrides()[model];
+}
+
 /**
  * Look up model limits and cost data from models.dev.
  *
@@ -1939,12 +1995,22 @@ const DEFAULT_MODEL_SPEC: ModelSpec = { context: 200_000, output: 8_192 };
  * zenmux) is priced from the provider the session is ACTUALLY routed to — the
  * flat map is last-write-wins across providers and would otherwise corrupt
  * `cacheReadCost` → `computeLayer0Cap`.
+ *
+ * `context`/`output` prefer an exact-match {@link getModelLimitOverride}
+ * over the models.dev-derived entry — see `modelLimits` in config.ts for
+ * why: an unrecognized self-hosted model id can otherwise prefix-match an
+ * unrelated real model in the public catalog and silently inherit ITS
+ * limits. Cost fields are unaffected (self-hosted inference has no
+ * real per-token price to override).
  */
 export function getModelSpec(model: string, providerID?: string): ModelSpec {
   const entry = getModelEntrySyncForProvider(providerID, model);
+  const override = getModelLimitOverride(model);
   return {
-    context: entry.limit?.context ?? DEFAULT_MODEL_SPEC.context,
-    output: entry.limit?.output ?? DEFAULT_MODEL_SPEC.output,
+    context:
+      override?.context ?? entry.limit?.context ?? DEFAULT_MODEL_SPEC.context,
+    output:
+      override?.output ?? entry.limit?.output ?? DEFAULT_MODEL_SPEC.output,
     cacheReadCost:
       entry.cost?.cache_read != null
         ? entry.cost.cache_read / 1_000_000 // models.dev is per-million, we need per-token
