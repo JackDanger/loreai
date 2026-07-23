@@ -139,6 +139,36 @@ export LORE_MODEL_OVERRIDES='{"qwen-fast":{"context":262144,"output":8192},"qwen
 Matching is exact model-id only — never fuzzy — so an override can't
 accidentally leak onto a different model.
 
+### Retrying transient upstream failures
+
+A self-hosted server behind a proxy like [llama-swap](https://github.com/mostlygeek/llama-swap)
+can go briefly unavailable — mid model-swap, or simply queued behind other
+concurrent requests on a shared box — and its proxy returns `502`/`503`/`504`
+(or the connection hangs) until it catches up. Without retry, that surfaces
+straight to the client as a failed turn (`Request timed out`), forcing
+emergency compaction and requiring you to manually resume.
+
+The gateway now retries these transiently-failed upstream calls automatically
+with **sigmoidal** (tanh) backoff — it ramps up quickly over the first few
+attempts and then plateaus at a steady delay, unlike exponential backoff
+(which grows unbounded and eventually waits absurdly long between attempts).
+Retried: thrown network errors (connection refused/reset), no response
+within a per-attempt timeout, and `502`/`503`/`504` responses. Not retried:
+any real answer, including 4xx and other 5xx codes — those come back
+immediately. Once a response starts arriving, its body/stream is read with
+no timeout at all (unchanged from before — a slow-but-progressing generation
+is never killed).
+
+Defaults (all tunable via env var, no `.lore.json` needed):
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `LORE_UPSTREAM_RETRY_MAX_ATTEMPTS` | `40` | Total attempts including the first |
+| `LORE_UPSTREAM_RETRY_ATTEMPT_TIMEOUT_MS` | `90000` | Max wait for a response to *start* per attempt |
+| `LORE_UPSTREAM_RETRY_MIN_DELAY_MS` | `500` | Backoff floor (delay before the 1st retry) |
+| `LORE_UPSTREAM_RETRY_MAX_DELAY_MS` | `30000` | Backoff ceiling the sigmoid plateaus at |
+| `LORE_UPSTREAM_RETRY_RAMP_SCALE` | `3` | Lower = ramps to the ceiling faster |
+
 ## Companion packages
 
 Lore ships as three packages sharing the same SQLite database at `~/.local/share/lore/lore.db`:

@@ -327,7 +327,7 @@ import {
   serializeRecallStore,
   deserializeRecallStore,
 } from "./recall";
-import { upstreamFetch } from "./fetch";
+import { upstreamFetchWithRetry } from "./upstream-retry";
 import {
   buildUpstreamRouteContext,
   decodeRequestBody,
@@ -4140,7 +4140,7 @@ async function forwardToUpstream(
       req.model,
       req.stream,
       () =>
-        upstreamFetch(url, {
+        upstreamFetchWithRetry(url, {
           method: "POST",
           headers,
           body: upstreamBody,
@@ -4149,7 +4149,7 @@ async function forwardToUpstream(
     return { response, serializedBody, effectiveProtocol };
   }
 
-  const response = await upstreamFetch(url, {
+  const response = await upstreamFetchWithRetry(url, {
     method: "POST",
     headers,
     body: upstreamBody,
@@ -6410,7 +6410,7 @@ async function passthroughResponsesCompact(
   applyUpstreamExtraHeaders(headers, config.upstreamExtraHeaders);
 
   try {
-    const upstream = await upstreamFetch(upstreamUrl, {
+    const upstream = await upstreamFetchWithRetry(upstreamUrl, {
       method: "POST",
       headers,
       body: passthroughBody,
